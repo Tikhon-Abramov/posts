@@ -1,8 +1,8 @@
 import { baseApi } from '../../../shared/api/baseApi';
 import type { MediaType, Post } from '../model/postTypes';
 import {
-  applyMockUserStateToPosts,
   applyMockUserStateToPost,
+  applyMockUserStateToPosts,
   createMockError,
   createMockImageUrl,
   createMockNotification,
@@ -46,7 +46,7 @@ interface SavedPostsParams {
   sort?: SortMode;
 }
 
-interface MyPostsParams {
+export interface MyPostsParams {
   cursor?: string | null;
   page?: number;
   limit?: number;
@@ -75,6 +75,12 @@ interface PostsStatsResponse {
   videosCount: number;
   publicPosts?: number;
   premiumPosts?: number;
+}
+
+type PostListCacheName = 'getFeed' | 'getSavedPosts' | 'getMyPosts';
+
+interface PatchWithUndo {
+  undo: () => void;
 }
 
 const USE_MOCK_POSTS = import.meta.env.VITE_USE_MOCK_POSTS !== 'false';
@@ -110,7 +116,7 @@ const DEFAULT_MOCK_POSTS: Post[] = [
     id: 2,
     title: 'Город после дождя',
     description:
-        'Пост с фото в ленте. Позже backend будет отдавать настоящие загруженные файлы.',
+        'Пост с фото в ленте. Backend отдает настоящий URL медиа из таблицы post_media.',
     visibility: 'PUBLIC',
     media: [
       {
@@ -161,8 +167,7 @@ const DEFAULT_MOCK_POSTS: Post[] = [
   {
     id: 4,
     title: 'Premium: видео-превью',
-    description:
-        'Временный видео-пост для проверки отображения video-контента на фронте.',
+    description: 'Тестовый видео-пост для проверки Premium-ленты.',
     visibility: 'PREMIUM',
     media: [
       {
@@ -306,7 +311,6 @@ function buildCursorResponse({
   }
 
   const cursorTime = cursor ? new Date(cursor).getTime() : null;
-
   const availablePosts = cursorTime
       ? posts.filter((post) => new Date(post.createdAt).getTime() < cursorTime)
       : posts;
@@ -537,19 +541,189 @@ function updatePostSaved(postId: number, saved: boolean) {
   };
 }
 
+function updateCachedPost(post: Post, postId: number, updater: (post: Post) => Post) {
+  if (post.id !== postId) {
+    return post;
+  }
+
+  return updater(post);
+}
+
+function updateCachedPostResponse(
+    response: CursorFeedResponse,
+    postId: number,
+    updater: (post: Post) => Post
+) {
+  const nextItems = response.items.map((post) =>
+      updateCachedPost(post, postId, updater)
+  );
+
+  return {
+    ...response,
+    items: nextItems,
+    posts: nextItems,
+  };
+}
+
+function patchPostCaches(
+    dispatch: unknown,
+    getState: unknown,
+    postId: number,
+    updater: (post: Post) => Post
+) {
+  const state = getState as () => {
+    baseApi: {
+      queries: Record<
+          string,
+          {
+            endpointName?: string;
+            originalArgs?: unknown;
+          }
+      >;
+    };
+  };
+
+  const typedDispatch = dispatch as (action: unknown) => unknown;
+  const queryEntries = Object.values(state().baseApi.queries || {});
+
+  const patches: PatchWithUndo[] = [];
+
+  queryEntries.forEach((query) => {
+    if (!query.endpointName || query.originalArgs === undefined) {
+      return;
+    }
+
+    if (query.endpointName === 'getPostById') {
+      const originalPostId = Number(query.originalArgs);
+
+      if (originalPostId !== postId) {
+        return;
+      }
+
+      const patch = typedDispatch(
+          postApi.util.updateQueryData(
+              'getPostById',
+              originalPostId,
+              (draft) => {
+                Object.assign(draft, updater(draft));
+              }
+          )
+      ) as unknown as PatchWithUndo;
+
+      patches.push(patch);
+      return;
+    }
+
+    const listEndpoints: PostListCacheName[] = [
+      'getFeed',
+      'getSavedPosts',
+      'getMyPosts',
+    ];
+
+    if (!listEndpoints.includes(query.endpointName as PostListCacheName)) {
+      return;
+    }
+
+    const patch = typedDispatch(
+        postApi.util.updateQueryData(
+            query.endpointName as PostListCacheName,
+            query.originalArgs as never,
+            (draft) => {
+              const nextResponse = updateCachedPostResponse(
+                  draft as CursorFeedResponse,
+                  postId,
+                  updater
+              );
+
+              Object.assign(draft, nextResponse);
+            }
+        )
+    ) as unknown as PatchWithUndo;
+
+    patches.push(patch);
+  });
+
+  return patches;
+}
+
+function buildReactionUpdater(nextReaction: 'LIKE' | 'DISLIKE') {
+  return (post: Post): Post => {
+    const isLike = nextReaction === 'LIKE';
+    const isDislike = nextReaction === 'DISLIKE';
+
+    const wasLiked = post.isLikedByMe;
+    const wasDisliked = post.isDislikedByMe;
+
+    let likesCount = post.likesCount;
+    let dislikesCount = post.dislikesCount;
+
+    if (isLike) {
+      if (wasLiked) {
+        likesCount = Math.max(likesCount - 1, 0);
+      } else {
+        likesCount += 1;
+
+        if (wasDisliked) {
+          dislikesCount = Math.max(dislikesCount - 1, 0);
+        }
+      }
+
+      return {
+        ...post,
+        likesCount,
+        dislikesCount,
+        isLikedByMe: !wasLiked,
+        isDislikedByMe: false,
+      };
+    }
+
+    if (isDislike) {
+      if (wasDisliked) {
+        dislikesCount = Math.max(dislikesCount - 1, 0);
+      } else {
+        dislikesCount += 1;
+
+        if (wasLiked) {
+          likesCount = Math.max(likesCount - 1, 0);
+        }
+      }
+
+      return {
+        ...post,
+        likesCount,
+        dislikesCount,
+        isLikedByMe: false,
+        isDislikedByMe: !wasDisliked,
+      };
+    }
+
+    return post;
+  };
+}
+
+function buildSaveUpdater(saved: boolean) {
+  return (post: Post): Post => ({
+    ...post,
+    isSavedByMe: saved,
+  });
+}
+
 export const postApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
-
     getPostById: builder.query<Post, number>({
       async queryFn(postId, _api, _extraOptions, baseQuery) {
         if (!USE_MOCK_POSTS) {
           const result = await baseQuery(`/posts/${postId}`);
 
           if (result.error) {
-            return { error: result.error };
+            return {
+              error: result.error,
+            };
           }
 
-          return { data: result.data as Post };
+          return {
+            data: result.data as Post,
+          };
         }
 
         await delay(100);
@@ -566,7 +740,11 @@ export const postApi = baseApi.injectEndpoints({
           data: applyMockUserStateToPost(post),
         };
       },
-      providesTags: ['Post'],
+
+      providesTags: (_result, _error, postId) => [
+        { type: 'Post', id: postId },
+        { type: 'Post', id: 'LIST' },
+      ],
     }),
 
     getFeed: builder.query<CursorFeedResponse, FeedParams>({
@@ -598,7 +776,9 @@ export const postApi = baseApi.injectEndpoints({
           });
 
           if (result.error) {
-            return { error: result.error };
+            return {
+              error: result.error,
+            };
           }
 
           const data = result.data as CursorFeedResponse;
@@ -629,7 +809,14 @@ export const postApi = baseApi.injectEndpoints({
           }),
         };
       },
-      providesTags: ['Post'],
+
+      providesTags: (result) => [
+        { type: 'Post', id: 'LIST' },
+        ...(result?.items || []).map((post) => ({
+          type: 'Post' as const,
+          id: post.id,
+        })),
+      ],
     }),
 
     getLatestFeedPosts: builder.query<LatestFeedResponse, LatestFeedParams>({
@@ -655,16 +842,19 @@ export const postApi = baseApi.injectEndpoints({
           });
 
           if (result.error) {
-            return { error: result.error };
+            return {
+              error: result.error,
+            };
           }
 
-          return { data: result.data as LatestFeedResponse };
+          return {
+            data: result.data as LatestFeedResponse,
+          };
         }
 
         await delay(80);
 
         const afterTime = after ? new Date(after).getTime() : 0;
-
         const items = getFeedPosts({
           type,
           search,
@@ -679,6 +869,7 @@ export const postApi = baseApi.injectEndpoints({
           },
         };
       },
+
       providesTags: ['Post'],
     }),
 
@@ -710,7 +901,9 @@ export const postApi = baseApi.injectEndpoints({
           });
 
           if (result.error) {
-            return { error: result.error };
+            return {
+              error: result.error,
+            };
           }
 
           const data = result.data as CursorFeedResponse;
@@ -748,7 +941,14 @@ export const postApi = baseApi.injectEndpoints({
           }),
         };
       },
-      providesTags: ['Post'],
+
+      providesTags: (result) => [
+        { type: 'Post', id: 'LIST' },
+        ...(result?.items || []).map((post) => ({
+          type: 'Post' as const,
+          id: post.id,
+        })),
+      ],
     }),
 
     getSavedPostsStats: builder.query<PostsStatsResponse, void>({
@@ -757,10 +957,14 @@ export const postApi = baseApi.injectEndpoints({
           const result = await baseQuery('/posts/saved/stats');
 
           if (result.error) {
-            return { error: result.error };
+            return {
+              error: result.error,
+            };
           }
 
-          return { data: result.data as PostsStatsResponse };
+          return {
+            data: result.data as PostsStatsResponse,
+          };
         }
 
         await delay(80);
@@ -783,6 +987,7 @@ export const postApi = baseApi.injectEndpoints({
           ),
         };
       },
+
       providesTags: ['Post'],
     }),
 
@@ -814,7 +1019,9 @@ export const postApi = baseApi.injectEndpoints({
           });
 
           if (result.error) {
-            return { error: result.error };
+            return {
+              error: result.error,
+            };
           }
 
           const data = result.data as CursorFeedResponse;
@@ -850,7 +1057,14 @@ export const postApi = baseApi.injectEndpoints({
           }),
         };
       },
-      providesTags: ['Post'],
+
+      providesTags: (result) => [
+        { type: 'Post', id: 'LIST' },
+        ...(result?.items || []).map((post) => ({
+          type: 'Post' as const,
+          id: post.id,
+        })),
+      ],
     }),
 
     getMyPostsStats: builder.query<PostsStatsResponse, void>({
@@ -859,10 +1073,14 @@ export const postApi = baseApi.injectEndpoints({
           const result = await baseQuery('/posts/my/stats');
 
           if (result.error) {
-            return { error: result.error };
+            return {
+              error: result.error,
+            };
           }
 
-          return { data: result.data as PostsStatsResponse };
+          return {
+            data: result.data as PostsStatsResponse,
+          };
         }
 
         await delay(80);
@@ -885,6 +1103,7 @@ export const postApi = baseApi.injectEndpoints({
           ),
         };
       },
+
       providesTags: ['Post'],
     }),
 
@@ -897,17 +1116,43 @@ export const postApi = baseApi.injectEndpoints({
           });
 
           if (result.error) {
-            return { error: result.error };
+            return {
+              error: result.error,
+            };
           }
 
-          return { data: result.data as { message: string } };
+          return {
+            data: result.data as { message: string },
+          };
         }
 
         await delay(100);
 
         return updatePostReaction(postId, 'like');
       },
-      invalidatesTags: ['Post'],
+
+      async onQueryStarted(postId, { dispatch, getState, queryFulfilled }) {
+        const patches = patchPostCaches(
+            dispatch,
+            getState,
+            postId,
+            buildReactionUpdater('LIKE')
+        );
+
+        try {
+          await queryFulfilled;
+        } catch {
+          patches.forEach((patch) => patch.undo());
+        } finally {
+          dispatch(baseApi.util.invalidateTags([{ type: 'Post', id: postId }]));
+        }
+      },
+
+      invalidatesTags: (_result, _error, postId) => [
+        { type: 'Post', id: postId },
+        { type: 'Post', id: 'LIST' },
+        'Notification',
+      ],
     }),
 
     dislikePost: builder.mutation<{ message: string }, number>({
@@ -919,17 +1164,42 @@ export const postApi = baseApi.injectEndpoints({
           });
 
           if (result.error) {
-            return { error: result.error };
+            return {
+              error: result.error,
+            };
           }
 
-          return { data: result.data as { message: string } };
+          return {
+            data: result.data as { message: string },
+          };
         }
 
         await delay(100);
 
         return updatePostReaction(postId, 'dislike');
       },
-      invalidatesTags: ['Post'],
+
+      async onQueryStarted(postId, { dispatch, getState, queryFulfilled }) {
+        const patches = patchPostCaches(
+            dispatch,
+            getState,
+            postId,
+            buildReactionUpdater('DISLIKE')
+        );
+
+        try {
+          await queryFulfilled;
+        } catch {
+          patches.forEach((patch) => patch.undo());
+        } finally {
+          dispatch(baseApi.util.invalidateTags([{ type: 'Post', id: postId }]));
+        }
+      },
+
+      invalidatesTags: (_result, _error, postId) => [
+        { type: 'Post', id: postId },
+        { type: 'Post', id: 'LIST' },
+      ],
     }),
 
     savePost: builder.mutation<{ message: string }, number>({
@@ -941,17 +1211,42 @@ export const postApi = baseApi.injectEndpoints({
           });
 
           if (result.error) {
-            return { error: result.error };
+            return {
+              error: result.error,
+            };
           }
 
-          return { data: result.data as { message: string } };
+          return {
+            data: result.data as { message: string },
+          };
         }
 
         await delay(100);
 
         return updatePostSaved(postId, true);
       },
-      invalidatesTags: ['Post'],
+
+      async onQueryStarted(postId, { dispatch, getState, queryFulfilled }) {
+        const patches = patchPostCaches(
+            dispatch,
+            getState,
+            postId,
+            buildSaveUpdater(true)
+        );
+
+        try {
+          await queryFulfilled;
+        } catch {
+          patches.forEach((patch) => patch.undo());
+        } finally {
+          dispatch(baseApi.util.invalidateTags([{ type: 'Post', id: postId }]));
+        }
+      },
+
+      invalidatesTags: (_result, _error, postId) => [
+        { type: 'Post', id: postId },
+        { type: 'Post', id: 'LIST' },
+      ],
     }),
 
     unsavePost: builder.mutation<{ message: string }, number>({
@@ -963,17 +1258,42 @@ export const postApi = baseApi.injectEndpoints({
           });
 
           if (result.error) {
-            return { error: result.error };
+            return {
+              error: result.error,
+            };
           }
 
-          return { data: result.data as { message: string } };
+          return {
+            data: result.data as { message: string },
+          };
         }
 
         await delay(100);
 
         return updatePostSaved(postId, false);
       },
-      invalidatesTags: ['Post'],
+
+      async onQueryStarted(postId, { dispatch, getState, queryFulfilled }) {
+        const patches = patchPostCaches(
+            dispatch,
+            getState,
+            postId,
+            buildSaveUpdater(false)
+        );
+
+        try {
+          await queryFulfilled;
+        } catch {
+          patches.forEach((patch) => patch.undo());
+        } finally {
+          dispatch(baseApi.util.invalidateTags([{ type: 'Post', id: postId }]));
+        }
+      },
+
+      invalidatesTags: (_result, _error, postId) => [
+        { type: 'Post', id: postId },
+        { type: 'Post', id: 'LIST' },
+      ],
     }),
   }),
 });
@@ -989,5 +1309,5 @@ export const {
   useDislikePostMutation,
   useSavePostMutation,
   useUnsavePostMutation,
-  useGetPostByIdQuery
+  useGetPostByIdQuery,
 } = postApi;

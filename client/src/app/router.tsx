@@ -9,7 +9,6 @@ import styled from 'styled-components';
 import { FiLock, FiShield } from 'react-icons/fi';
 
 import type { AppDispatch, RootState } from './store';
-
 import { AppLayout } from '../widgets/layout/AppLayout';
 import { AdminLayout } from '../widgets/admin/AdminLayout';
 
@@ -37,7 +36,6 @@ interface GuardProps {
 
 function RequireAuth({ children, reason }: GuardProps) {
   const dispatch = useDispatch<AppDispatch>();
-
   const accessToken = useSelector((state: RootState) => state.auth.accessToken);
 
   useEffect(() => {
@@ -68,7 +66,6 @@ function RequireAuth({ children, reason }: GuardProps) {
 
 function RequireAdmin({ children }: GuardProps) {
   const dispatch = useDispatch<AppDispatch>();
-
   const { accessToken, user } = useSelector((state: RootState) => state.auth);
 
   useEffect(() => {
@@ -141,7 +138,7 @@ export const router = createBrowserRouter([
       {
         path: 'my-posts',
         element: (
-            <RequireAuth reason="Чтобы смотреть свои публикации, нужно войти в аккаунт.">
+            <RequireAuth reason="Чтобы открыть свои публикации, нужно войти в аккаунт.">
               <MyPostsPage />
             </RequireAuth>
         ),
@@ -149,7 +146,7 @@ export const router = createBrowserRouter([
       {
         path: 'notifications',
         element: (
-            <RequireAuth reason="Чтобы смотреть уведомления, нужно войти в аккаунт.">
+            <RequireAuth reason="Чтобы открыть уведомления, нужно войти в аккаунт.">
               <NotificationsPage />
             </RequireAuth>
         ),
@@ -157,7 +154,7 @@ export const router = createBrowserRouter([
       {
         path: 'saved',
         element: (
-            <RequireAuth reason="Чтобы смотреть сохраненные посты, нужно войти в аккаунт.">
+            <RequireAuth reason="Чтобы открыть сохраненные публикации, нужно войти в аккаунт.">
               <SavedPostsPage />
             </RequireAuth>
         ),
@@ -171,9 +168,17 @@ export const router = createBrowserRouter([
         ),
       },
       {
+        path: 'content-request',
+        element: (
+            <RequireAuth reason="Чтобы предложить публикацию, нужно войти в аккаунт.">
+              <ContentRequestPage />
+            </RequireAuth>
+        ),
+      },
+      {
         path: 'submit-content',
         element: (
-            <RequireAuth reason="Чтобы предложить публикацию админу, нужно войти в аккаунт.">
+            <RequireAuth reason="Чтобы предложить публикацию, нужно войти в аккаунт.">
               <ContentRequestPage />
             </RequireAuth>
         ),
@@ -181,24 +186,21 @@ export const router = createBrowserRouter([
       {
         path: 'subscription',
         element: (
-            <RequireAuth reason="Чтобы оформить подписку, нужно войти в аккаунт.">
+            <RequireAuth reason="Чтобы управлять подпиской, нужно войти в аккаунт.">
               <SubscriptionPage />
             </RequireAuth>
         ),
       },
     ],
   },
-
   {
     path: '/login',
     element: <AuthModalRoute mode="login" />,
   },
-
   {
     path: '/register',
     element: <AuthModalRoute mode="register" />,
   },
-
   {
     path: '/admin',
     element: (
@@ -225,7 +227,6 @@ export const router = createBrowserRouter([
       },
     ],
   },
-
   {
     path: '*',
     element: <Navigate to="/" replace />,
@@ -242,7 +243,9 @@ function AccessStub({ icon, title, text }: AccessStubProps) {
   return (
       <Stub>
         <IconBox>{icon}</IconBox>
+
         <h1>{title}</h1>
+
         <p>{text}</p>
       </Stub>
   );

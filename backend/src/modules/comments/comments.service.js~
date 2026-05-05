@@ -69,7 +69,7 @@ function assertCanViewPost(viewer, post) {
 }
 
 function buildCursorCondition({ cursor, params }) {
-    if (!cursor || cursor === 'null' || cursor === 'undefined') {
+    if (!cursor) {
         return '';
     }
 
@@ -102,16 +102,16 @@ function mapCommentRow(row) {
 async function getPostAccess(postId) {
     const [rows] = await pool.execute(
         `
-            SELECT
-                id,
-                author_id,
-                title,
-                visibility
-            FROM posts
-            WHERE id = :postId
-              AND deleted_at IS NULL
-                LIMIT 1
-        `,
+      SELECT
+        id,
+        author_id,
+        title,
+        visibility
+      FROM posts
+      WHERE id = :postId
+        AND deleted_at IS NULL
+      LIMIT 1
+    `,
         {
             postId,
         }
@@ -123,7 +123,6 @@ async function getPostAccess(postId) {
 async function getComments({ viewer, postId, query }) {
     const normalizedPostId = parseId(postId, 'postId');
     const limit = parseLimit(query.limit);
-    const sqlLimit = limit + 1;
 
     const post = await getPostAccess(normalizedPostId);
 
@@ -135,6 +134,7 @@ async function getComments({ viewer, postId, query }) {
 
     const params = {
         postId: normalizedPostId,
+        limit: limit + 1,
     };
 
     const cursorCondition = buildCursorCondition({
@@ -144,23 +144,23 @@ async function getComments({ viewer, postId, query }) {
 
     const [rows] = await pool.execute(
         `
-            SELECT
-                c.id,
-                c.post_id,
-                c.author_id,
-                c.text,
-                c.created_at,
-                c.updated_at,
-                u.nickname AS author_nickname,
-                u.avatar_url AS author_avatar_url
-            FROM comments c
-                     INNER JOIN users u ON u.id = c.author_id
-            WHERE c.post_id = :postId
-              AND c.deleted_at IS NULL
-                ${cursorCondition}
-            ORDER BY c.created_at DESC, c.id DESC
-                LIMIT ${sqlLimit}
-        `,
+      SELECT
+        c.id,
+        c.post_id,
+        c.author_id,
+        c.text,
+        c.created_at,
+        c.updated_at,
+        u.nickname AS author_nickname,
+        u.avatar_url AS author_avatar_url
+      FROM comments c
+      INNER JOIN users u ON u.id = c.author_id
+      WHERE c.post_id = :postId
+        AND c.deleted_at IS NULL
+        ${cursorCondition}
+      ORDER BY c.created_at DESC, c.id DESC
+      LIMIT :limit
+    `,
         params
     );
 
@@ -189,17 +189,17 @@ async function createComment({ viewer, postId, payload }) {
 
     const [result] = await pool.execute(
         `
-            INSERT INTO comments (
-                post_id,
-                author_id,
-                text
-            )
-            VALUES (
-                       :postId,
-                       :authorId,
-                       :text
-                   )
-        `,
+      INSERT INTO comments (
+        post_id,
+        author_id,
+        text
+      )
+      VALUES (
+        :postId,
+        :authorId,
+        :text
+      )
+    `,
         {
             postId: normalizedPostId,
             authorId: viewer.id,
@@ -222,21 +222,21 @@ async function createComment({ viewer, postId, payload }) {
 async function getCommentById(commentId) {
     const [rows] = await pool.execute(
         `
-            SELECT
-                c.id,
-                c.post_id,
-                c.author_id,
-                c.text,
-                c.created_at,
-                c.updated_at,
-                u.nickname AS author_nickname,
-                u.avatar_url AS author_avatar_url
-            FROM comments c
-                     INNER JOIN users u ON u.id = c.author_id
-            WHERE c.id = :commentId
-              AND c.deleted_at IS NULL
-                LIMIT 1
-        `,
+      SELECT
+        c.id,
+        c.post_id,
+        c.author_id,
+        c.text,
+        c.created_at,
+        c.updated_at,
+        u.nickname AS author_nickname,
+        u.avatar_url AS author_avatar_url
+      FROM comments c
+      INNER JOIN users u ON u.id = c.author_id
+      WHERE c.id = :commentId
+        AND c.deleted_at IS NULL
+      LIMIT 1
+    `,
         {
             commentId,
         }
@@ -252,25 +252,25 @@ async function getCommentById(commentId) {
 async function createCommentNotification({ post, actorNickname }) {
     await pool.execute(
         `
-            INSERT INTO notifications (
-                user_id,
-                type,
-                title,
-                text,
-                is_read,
-                post_id,
-                request_id
-            )
-            VALUES (
-                       :userId,
-                       'NEW_COMMENT',
-                       'Новый комментарий',
-                       :text,
-                       FALSE,
-                       :postId,
-                       NULL
-                   )
-        `,
+      INSERT INTO notifications (
+        user_id,
+        type,
+        title,
+        text,
+        is_read,
+        post_id,
+        request_id
+      )
+      VALUES (
+        :userId,
+        'NEW_COMMENT',
+        'Новый комментарий',
+        :text,
+        FALSE,
+        :postId,
+        NULL
+      )
+    `,
         {
             userId: post.author_id,
             text: `@${actorNickname} оставил комментарий к вашей публикации «${post.title}».`,
@@ -293,16 +293,16 @@ async function deleteComment({ viewer, postId, commentId }) {
 
     const [rows] = await pool.execute(
         `
-            SELECT
-                id,
-                post_id,
-                author_id
-            FROM comments
-            WHERE id = :commentId
-              AND post_id = :postId
-              AND deleted_at IS NULL
-                LIMIT 1
-        `,
+      SELECT
+        id,
+        post_id,
+        author_id
+      FROM comments
+      WHERE id = :commentId
+        AND post_id = :postId
+        AND deleted_at IS NULL
+      LIMIT 1
+    `,
         {
             commentId: normalizedCommentId,
             postId: normalizedPostId,
@@ -324,11 +324,11 @@ async function deleteComment({ viewer, postId, commentId }) {
 
     await pool.execute(
         `
-            UPDATE comments
-            SET deleted_at = NOW()
-            WHERE id = :commentId
-                LIMIT 1
-        `,
+      UPDATE comments
+      SET deleted_at = NOW()
+      WHERE id = :commentId
+      LIMIT 1
+    `,
         {
             commentId: normalizedCommentId,
         }

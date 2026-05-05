@@ -1,5 +1,3 @@
-/* eslint-disable react-hooks/set-state-in-effect */
-
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
@@ -32,6 +30,7 @@ const POLLING_INTERVAL = 8000;
 
 export function PremiumFeedPage() {
     const dispatch = useDispatch<AppDispatch>();
+
     const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
     const { accessToken, user } = useSelector((state: RootState) => state.auth);
@@ -47,7 +46,7 @@ export function PremiumFeedPage() {
 
     const isAuth = Boolean(accessToken);
     const isSessionChecking = isAuth && !user;
-    const hasPremium = Boolean(user?.hasPremium || user?.role === 'ADMIN');
+    const hasPremium = Boolean(user?.hasPremium);
 
     const {
         data,
@@ -88,18 +87,18 @@ export function PremiumFeedPage() {
     const isLoadingMore = isFetching && loadedPosts.length > 0;
 
     useEffect(() => {
+        const items = data?.items || data?.posts || [];
+
         if (!data) {
             return;
         }
 
-        const items = data.items || data.posts || [];
-
         setLoadedPosts((currentPosts) => {
             if (!cursor) {
-                return mergePostsKeepingFirstPriority(items, currentPosts);
+                return mergePostsKeepingOrder(items, currentPosts);
             }
 
-            return mergePostsKeepingFirstPriority(currentPosts, items);
+            return mergePostsKeepingOrder(currentPosts, items);
         });
 
         setNextCursor(data.nextCursor);
@@ -114,7 +113,7 @@ export function PremiumFeedPage() {
         }
 
         setLoadedPosts((currentPosts) =>
-            mergePostsKeepingFirstPriority(latestItems, currentPosts)
+            mergePostsKeepingOrder(latestItems, currentPosts)
         );
     }, [latestData]);
 
@@ -186,48 +185,50 @@ export function PremiumFeedPage() {
 
     if (!isAuth) {
         return (
-            <Paywall>
-                <IconBox>
-                    <FiLock />
-                </IconBox>
-
-                <Eyebrow>Premium Feed</Eyebrow>
-
-                <Title>Закрытая лента</Title>
-
-                <Subtitle>
-                    Премиум-посты доступны только авторизованным пользователям с активной
-                    подпиской. Войдите или создайте аккаунт, чтобы продолжить.
-                </Subtitle>
-
-                <Benefits>
-                    <Benefit>
-                        <FiStar />
-                        Эксклюзивные фото и видео
-                    </Benefit>
-
-                    <Benefit>
-                        <FiZap />
-                        Доступ к закрытым публикациям
-                    </Benefit>
-
-                    <Benefit>
+            <Page>
+                <Paywall>
+                    <IconBox>
                         <FiLock />
-                        Контент только для подписчиков
-                    </Benefit>
-                </Benefits>
+                    </IconBox>
 
-                <Actions>
-                    <PrimaryButton type="button" onClick={handleOpenLogin}>
-                        <FiLogIn />
-                        Войти
-                    </PrimaryButton>
+                    <Eyebrow>Premium Feed</Eyebrow>
 
-                    <SecondaryButton type="button" onClick={handleOpenRegister}>
-                        Создать аккаунт
-                    </SecondaryButton>
-                </Actions>
-            </Paywall>
+                    <Title>Закрытая лента</Title>
+
+                    <Subtitle>
+                        Премиум-посты доступны только авторизованным пользователям с активной
+                        подпиской. Войдите или создайте аккаунт, чтобы продолжить.
+                    </Subtitle>
+
+                    <Benefits>
+                        <Benefit>
+                            <FiStar />
+                            <span>Эксклюзивные фото и видео</span>
+                        </Benefit>
+
+                        <Benefit>
+                            <FiZap />
+                            <span>Доступ к закрытым публикациям</span>
+                        </Benefit>
+
+                        <Benefit>
+                            <FiLock />
+                            <span>Контент только для подписчиков</span>
+                        </Benefit>
+                    </Benefits>
+
+                    <Actions>
+                        <PrimaryButton type="button" onClick={handleOpenLogin}>
+                            <FiLogIn />
+                            Войти
+                        </PrimaryButton>
+
+                        <SecondaryButton type="button" onClick={handleOpenRegister}>
+                            Создать аккаунт
+                        </SecondaryButton>
+                    </Actions>
+                </Paywall>
+            </Page>
         );
     }
 
@@ -235,9 +236,7 @@ export function PremiumFeedPage() {
         return (
             <StateCard>
                 <FiLoader />
-
                 <h1>Проверяем сессию</h1>
-
                 <p>Сейчас подтвердим аккаунт и доступ к премиум-разделу.</p>
             </StateCard>
         );
@@ -245,51 +244,51 @@ export function PremiumFeedPage() {
 
     if (!hasPremium) {
         return (
-            <Paywall>
-                <IconBox>
-                    <FiStar />
-                </IconBox>
-
-                <Eyebrow>Нужна подписка</Eyebrow>
-
-                <Title>Открой Premium</Title>
-
-                <Subtitle>
-                    Ваш аккаунт авторизован, но активной подписки пока нет. Оформите
-                    подписку, чтобы смотреть закрытые публикации.
-                </Subtitle>
-
-                <Benefits>
-                    <Benefit>
+            <Page>
+                <Paywall>
+                    <IconBox>
                         <FiStar />
-                        Премиум фото и видео
-                    </Benefit>
+                    </IconBox>
 
-                    <Benefit>
-                        <FiZap />
-                        Отдельная закрытая лента
-                    </Benefit>
+                    <Eyebrow>Нужна подписка</Eyebrow>
 
-                    <Benefit>
-                        <FiLock />
-                        Доступ только для подписчиков
-                    </Benefit>
-                </Benefits>
+                    <Title>Открой Premium</Title>
 
-                <Actions>
-                    <SubscribeLink to="/subscription">Оформить подписку</SubscribeLink>
-                </Actions>
-            </Paywall>
+                    <Subtitle>
+                        Ваш аккаунт авторизован, но активной подписки пока нет. Оформите
+                        подписку, чтобы смотреть закрытые публикации.
+                    </Subtitle>
+
+                    <Benefits>
+                        <Benefit>
+                            <FiStar />
+                            <span>Премиум фото и видео</span>
+                        </Benefit>
+
+                        <Benefit>
+                            <FiZap />
+                            <span>Отдельная закрытая лента</span>
+                        </Benefit>
+
+                        <Benefit>
+                            <FiLock />
+                            <span>Доступ только для подписчиков</span>
+                        </Benefit>
+                    </Benefits>
+
+                    <Actions>
+                        <SubscribeLink to="/subscription">Оформить подписку</SubscribeLink>
+                    </Actions>
+                </Paywall>
+            </Page>
         );
     }
 
     if (isFirstLoading) {
         return (
             <StateCard>
-                <FiLoader />
-
+                <FiStar />
                 <h1>Загружаем Premium</h1>
-
                 <p>Подготавливаем закрытые публикации.</p>
             </StateCard>
         );
@@ -299,9 +298,7 @@ export function PremiumFeedPage() {
         return (
             <StateCard>
                 <FiAlertCircle />
-
                 <h1>Не удалось загрузить Premium</h1>
-
                 <p>Проверьте подключение или попробуйте повторить загрузку.</p>
 
                 <PrimaryButton type="button" onClick={() => refetch()}>
@@ -337,8 +334,9 @@ export function PremiumFeedPage() {
                     <FiSearch />
 
                     <input
+                        type="text"
                         value={searchQuery}
-                        placeholder="Поиск по Premium-публикациям..."
+                        placeholder="Поиск по Premium: название, описание, автор..."
                         onChange={(event) => setSearchQuery(event.target.value)}
                     />
                 </SearchBox>
@@ -387,9 +385,7 @@ export function PremiumFeedPage() {
                         {hasMore ? (
                             <LoadingMore>
                                 <FiLoader />
-                                <span>
-                  Листайте ниже — Premium-посты подгрузятся автоматически
-                </span>
+                                <span>Листайте ниже — Premium-посты подгрузятся автоматически</span>
                             </LoadingMore>
                         ) : (
                             <EndMessage>
@@ -400,7 +396,7 @@ export function PremiumFeedPage() {
                 </>
             ) : (
                 <EmptyCard>
-                    <FiAlertCircle />
+                    <FiSearch />
 
                     <h2>Premium-постов не найдено</h2>
 
@@ -418,44 +414,38 @@ export function PremiumFeedPage() {
     );
 }
 
-function mergePostsKeepingFirstPriority(first: Post[], second: Post[]) {
-    const result: Post[] = [];
-    const seen = new Set<number>();
+function mergePostsKeepingOrder(first: Post[], second: Post[]) {
+    const map = new Map<number, Post>();
 
     [...first, ...second].forEach((post) => {
-        if (seen.has(post.id)) {
-            return;
-        }
-
-        seen.add(post.id);
-        result.push(post);
+        map.set(post.id, post);
     });
 
-    return result;
+    return Array.from(map.values());
 }
 
 const Page = styled.div`
-    display: grid;
-    gap: 18px;
+  display: grid;
+  gap: 18px;
 `;
 
 const Hero = styled.section`
-    padding: 22px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.lg};
-    background:
-            radial-gradient(circle at top left, rgba(236, 72, 153, 0.22), transparent 34%),
-            radial-gradient(circle at bottom right, rgba(124, 58, 237, 0.22), transparent 34%),
-            rgba(21, 25, 43, 0.84);
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 18px;
+  padding: 22px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background:
+    radial-gradient(circle at top left, rgba(236, 72, 153, 0.22), transparent 34%),
+    radial-gradient(circle at bottom right, rgba(124, 58, 237, 0.22), transparent 34%),
+    rgba(21, 25, 43, 0.84);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
 
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        padding: 18px;
-        flex-direction: column;
-    }
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    padding: 18px;
+    flex-direction: column;
+  }
 `;
 
 const HeroContent = styled.div`

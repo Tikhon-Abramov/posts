@@ -1,22 +1,13 @@
-/* eslint-disable react-hooks/set-state-in-effect */
-
-import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { useDispatch, useSelector } from 'react-redux';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import styled from 'styled-components';
 import {
     FiAlertCircle,
     FiFilter,
+    FiGlobe,
     FiLoader,
-    FiLock,
-    FiLogIn,
     FiSearch,
-    FiStar,
-    FiZap,
 } from 'react-icons/fi';
 
-import type { AppDispatch, RootState } from '../app/store';
-import { openAuthModal } from '../entities/auth/slice/authSlice';
 import {
     useGetFeedQuery,
     useGetLatestFeedPostsQuery,
@@ -30,11 +21,8 @@ type SortMode = 'RECENT' | 'POPULAR';
 const FEED_LIMIT = 10;
 const POLLING_INTERVAL = 8000;
 
-export function PremiumFeedPage() {
-    const dispatch = useDispatch<AppDispatch>();
+export function HomePage() {
     const loadMoreRef = useRef<HTMLDivElement | null>(null);
-
-    const { accessToken, user } = useSelector((state: RootState) => state.auth);
 
     const [searchQuery, setSearchQuery] = useState('');
     const [mediaFilter, setMediaFilter] = useState<MediaFilter>('ALL');
@@ -45,41 +33,32 @@ export function PremiumFeedPage() {
     const [nextCursor, setNextCursor] = useState<string | null>(null);
     const [hasMore, setHasMore] = useState(true);
 
-    const isAuth = Boolean(accessToken);
-    const isSessionChecking = isAuth && !user;
-    const hasPremium = Boolean(user?.hasPremium || user?.role === 'ADMIN');
-
     const {
         data,
         isLoading,
         isFetching,
         isError,
         refetch,
-    } = useGetFeedQuery(
-        {
-            type: 'premium',
-            cursor,
-            limit: FEED_LIMIT,
-            search: searchQuery,
-            mediaType: mediaFilter,
-            sort: sortMode,
-        },
-        {
-            skip: !hasPremium,
-        }
-    );
+    } = useGetFeedQuery({
+        type: 'public',
+        cursor,
+        limit: FEED_LIMIT,
+        search: searchQuery,
+        mediaType: mediaFilter,
+        sort: sortMode,
+    });
 
     const latestAfter = loadedPosts[0]?.createdAt || null;
 
     const { data: latestData } = useGetLatestFeedPostsQuery(
         {
-            type: 'premium',
+            type: 'public',
             after: latestAfter,
             search: searchQuery,
             mediaType: mediaFilter,
         },
         {
-            skip: !hasPremium || !latestAfter || sortMode !== 'RECENT',
+            skip: !latestAfter || sortMode !== 'RECENT',
             pollingInterval: POLLING_INTERVAL,
         }
     );
@@ -88,18 +67,18 @@ export function PremiumFeedPage() {
     const isLoadingMore = isFetching && loadedPosts.length > 0;
 
     useEffect(() => {
+        const items = data?.items || data?.posts || [];
+
         if (!data) {
             return;
         }
 
-        const items = data.items || data.posts || [];
-
         setLoadedPosts((currentPosts) => {
             if (!cursor) {
-                return mergePostsKeepingFirstPriority(items, currentPosts);
+                return mergePostsKeepingOrder(items, currentPosts);
             }
 
-            return mergePostsKeepingFirstPriority(currentPosts, items);
+            return mergePostsKeepingOrder(currentPosts, items);
         });
 
         setNextCursor(data.nextCursor);
@@ -114,7 +93,7 @@ export function PremiumFeedPage() {
         }
 
         setLoadedPosts((currentPosts) =>
-            mergePostsKeepingFirstPriority(latestItems, currentPosts)
+            mergePostsKeepingOrder(latestItems, currentPosts)
         );
     }, [latestData]);
 
@@ -158,139 +137,34 @@ export function PremiumFeedPage() {
         };
     }, [hasMore, isFetching, nextCursor]);
 
+    const statsText = useMemo(() => {
+        if (!loadedPosts.length) {
+            return 'Пока публикаций нет';
+        }
+
+        const imageCount = loadedPosts.filter(
+            (post) => post.media[0]?.type === 'IMAGE'
+        ).length;
+
+        const videoCount = loadedPosts.filter(
+            (post) => post.media[0]?.type === 'VIDEO'
+        ).length;
+
+        return `Загружено: ${loadedPosts.length} • Фото: ${imageCount} • Видео: ${videoCount}`;
+    }, [loadedPosts]);
+
     const resetFilters = () => {
         setSearchQuery('');
         setMediaFilter('ALL');
         setSortMode('RECENT');
     };
 
-    const handleOpenLogin = () => {
-        dispatch(
-            openAuthModal({
-                mode: 'login',
-                reason:
-                    'Войдите в аккаунт, чтобы оформить подписку и получить доступ к премиум-ленте.',
-            })
-        );
-    };
-
-    const handleOpenRegister = () => {
-        dispatch(
-            openAuthModal({
-                mode: 'register',
-                reason:
-                    'Создайте аккаунт, чтобы оформить подписку и смотреть закрытые фото и видео.',
-            })
-        );
-    };
-
-    if (!isAuth) {
-        return (
-            <Paywall>
-                <IconBox>
-                    <FiLock />
-                </IconBox>
-
-                <Eyebrow>Premium Feed</Eyebrow>
-
-                <Title>Закрытая лента</Title>
-
-                <Subtitle>
-                    Премиум-посты доступны только авторизованным пользователям с активной
-                    подпиской. Войдите или создайте аккаунт, чтобы продолжить.
-                </Subtitle>
-
-                <Benefits>
-                    <Benefit>
-                        <FiStar />
-                        Эксклюзивные фото и видео
-                    </Benefit>
-
-                    <Benefit>
-                        <FiZap />
-                        Доступ к закрытым публикациям
-                    </Benefit>
-
-                    <Benefit>
-                        <FiLock />
-                        Контент только для подписчиков
-                    </Benefit>
-                </Benefits>
-
-                <Actions>
-                    <PrimaryButton type="button" onClick={handleOpenLogin}>
-                        <FiLogIn />
-                        Войти
-                    </PrimaryButton>
-
-                    <SecondaryButton type="button" onClick={handleOpenRegister}>
-                        Создать аккаунт
-                    </SecondaryButton>
-                </Actions>
-            </Paywall>
-        );
-    }
-
-    if (isSessionChecking) {
-        return (
-            <StateCard>
-                <FiLoader />
-
-                <h1>Проверяем сессию</h1>
-
-                <p>Сейчас подтвердим аккаунт и доступ к премиум-разделу.</p>
-            </StateCard>
-        );
-    }
-
-    if (!hasPremium) {
-        return (
-            <Paywall>
-                <IconBox>
-                    <FiStar />
-                </IconBox>
-
-                <Eyebrow>Нужна подписка</Eyebrow>
-
-                <Title>Открой Premium</Title>
-
-                <Subtitle>
-                    Ваш аккаунт авторизован, но активной подписки пока нет. Оформите
-                    подписку, чтобы смотреть закрытые публикации.
-                </Subtitle>
-
-                <Benefits>
-                    <Benefit>
-                        <FiStar />
-                        Премиум фото и видео
-                    </Benefit>
-
-                    <Benefit>
-                        <FiZap />
-                        Отдельная закрытая лента
-                    </Benefit>
-
-                    <Benefit>
-                        <FiLock />
-                        Доступ только для подписчиков
-                    </Benefit>
-                </Benefits>
-
-                <Actions>
-                    <SubscribeLink to="/subscription">Оформить подписку</SubscribeLink>
-                </Actions>
-            </Paywall>
-        );
-    }
-
     if (isFirstLoading) {
         return (
             <StateCard>
-                <FiLoader />
-
-                <h1>Загружаем Premium</h1>
-
-                <p>Подготавливаем закрытые публикации.</p>
+                <FiGlobe />
+                <h1>Загружаем ленту</h1>
+                <p>Сейчас покажем свежие публичные фото и видео.</p>
             </StateCard>
         );
     }
@@ -299,9 +173,7 @@ export function PremiumFeedPage() {
         return (
             <StateCard>
                 <FiAlertCircle />
-
-                <h1>Не удалось загрузить Premium</h1>
-
+                <h1>Не удалось загрузить ленту</h1>
                 <p>Проверьте подключение или попробуйте повторить загрузку.</p>
 
                 <PrimaryButton type="button" onClick={() => refetch()}>
@@ -315,20 +187,19 @@ export function PremiumFeedPage() {
         <Page>
             <Hero>
                 <HeroContent>
-                    <Eyebrow>Premium</Eyebrow>
+                    <Eyebrow>Обычная лента</Eyebrow>
 
-                    <Title>Закрытая лента</Title>
+                    <Title>Свежие фото и видео</Title>
 
                     <Subtitle>
-                        Premium-публикации подгружаются частями при прокрутке. Новые посты
-                        проверяются автоматически и появляются сверху без перезагрузки
-                        страницы.
+                        Публичные посты доступны всем пользователям. Лента подгружается
+                        частями при прокрутке и автоматически проверяет новые публикации.
                     </Subtitle>
                 </HeroContent>
 
                 <HeroBadge>
-                    <FiStar />
-                    Active
+                    <FiGlobe />
+                    Public
                 </HeroBadge>
             </Hero>
 
@@ -337,8 +208,9 @@ export function PremiumFeedPage() {
                     <FiSearch />
 
                     <input
+                        type="text"
                         value={searchQuery}
-                        placeholder="Поиск по Premium-публикациям..."
+                        placeholder="Поиск по обычной ленте: название, описание, автор..."
                         onChange={(event) => setSearchQuery(event.target.value)}
                     />
                 </SearchBox>
@@ -371,7 +243,7 @@ export function PremiumFeedPage() {
             {loadedPosts.length ? (
                 <>
                     <FeedMeta>
-                        <span>Лента обновляется автоматически</span>
+                        <span>{statsText}</span>
 
                         {isLoadingMore && (
                             <LoadingInline>
@@ -387,22 +259,18 @@ export function PremiumFeedPage() {
                         {hasMore ? (
                             <LoadingMore>
                                 <FiLoader />
-                                <span>
-                  Листайте ниже — Premium-посты подгрузятся автоматически
-                </span>
+                                <span>Листайте ниже — посты подгрузятся автоматически</span>
                             </LoadingMore>
                         ) : (
-                            <EndMessage>
-                                Вы посмотрели все Premium-посты по текущим фильтрам
-                            </EndMessage>
+                            <EndMessage>Вы посмотрели все посты по текущим фильтрам</EndMessage>
                         )}
                     </LoadMoreAnchor>
                 </>
             ) : (
                 <EmptyCard>
-                    <FiAlertCircle />
+                    <FiSearch />
 
-                    <h2>Premium-постов не найдено</h2>
+                    <h2>Постов не найдено</h2>
 
                     <p>
                         Попробуйте изменить поисковую фразу, выбрать другой тип медиа или
@@ -418,53 +286,47 @@ export function PremiumFeedPage() {
     );
 }
 
-function mergePostsKeepingFirstPriority(first: Post[], second: Post[]) {
-    const result: Post[] = [];
-    const seen = new Set<number>();
+function mergePostsKeepingOrder(first: Post[], second: Post[]) {
+    const map = new Map<number, Post>();
 
     [...first, ...second].forEach((post) => {
-        if (seen.has(post.id)) {
-            return;
-        }
-
-        seen.add(post.id);
-        result.push(post);
+        map.set(post.id, post);
     });
 
-    return result;
+    return Array.from(map.values());
 }
 
 const Page = styled.div`
-    display: grid;
-    gap: 18px;
+  display: grid;
+  gap: 18px;
 `;
 
 const Hero = styled.section`
-    padding: 22px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.lg};
-    background:
-            radial-gradient(circle at top left, rgba(236, 72, 153, 0.22), transparent 34%),
-            radial-gradient(circle at bottom right, rgba(124, 58, 237, 0.22), transparent 34%),
-            rgba(21, 25, 43, 0.84);
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 18px;
+  padding: 22px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background:
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.22), transparent 34%),
+    radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.16), transparent 34%),
+    rgba(21, 25, 43, 0.86);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
 
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        padding: 18px;
-        flex-direction: column;
-    }
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    flex-direction: column;
+    padding: 18px;
+  }
 `;
 
 const HeroContent = styled.div`
-    min-width: 0;
+  min-width: 0;
 `;
 
 const Eyebrow = styled.div`
     margin-bottom: 8px;
-    color: #ec4899;
+    color: ${({ theme }) => theme.colors.primaryHover};
     font-size: 13px;
     font-weight: 900;
     text-transform: uppercase;
@@ -479,7 +341,7 @@ const Title = styled.h1`
 `;
 
 const Subtitle = styled.p`
-    max-width: 680px;
+    max-width: 720px;
     margin: 12px 0 0;
     color: ${({ theme }) => theme.colors.textMuted};
     line-height: 1.65;
@@ -487,12 +349,12 @@ const Subtitle = styled.p`
 
 const HeroBadge = styled.div`
     flex: 0 0 auto;
-    height: 42px;
+    min-height: 42px;
     padding: 0 14px;
-    border: 1px solid rgba(236, 72, 153, 0.36);
+    border: 1px solid rgba(37, 99, 235, 0.36);
     border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(236, 72, 153, 0.12);
-    color: #fbcfe8;
+    background: rgba(37, 99, 235, 0.12);
+    color: #bfdbfe;
     display: inline-flex;
     align-items: center;
     gap: 8px;
@@ -544,8 +406,8 @@ const SearchBox = styled.div`
     }
 
     &:focus-within {
-        border-color: rgba(236, 72, 153, 0.72);
-        box-shadow: 0 0 0 4px rgba(236, 72, 153, 0.11);
+        border-color: rgba(139, 92, 246, 0.72);
+        box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.12);
     }
 `;
 
@@ -575,7 +437,7 @@ const FilterSelect = styled.select`
     }
 
     &:focus {
-        border-color: rgba(236, 72, 153, 0.72);
+        border-color: rgba(139, 92, 246, 0.72);
     }
 `;
 
@@ -594,7 +456,7 @@ const ResetButton = styled.button`
 
     &:hover {
         background: rgba(255, 255, 255, 0.09);
-        border-color: rgba(236, 72, 153, 0.45);
+        border-color: rgba(139, 92, 246, 0.45);
     }
 `;
 
@@ -615,7 +477,7 @@ const FeedMeta = styled.div`
 `;
 
 const LoadingInline = styled.div`
-    color: #f9a8d4;
+    color: ${({ theme }) => theme.colors.primaryHover};
     display: inline-flex;
     align-items: center;
     gap: 8px;
@@ -650,7 +512,7 @@ const LoadingMore = styled.div`
     font-weight: 900;
 
     svg {
-        color: #f9a8d4;
+        color: ${({ theme }) => theme.colors.primaryHover};
         animation: spin 0.8s linear infinite;
     }
 
@@ -667,135 +529,13 @@ const EndMessage = styled.div`
     font-weight: 800;
 `;
 
-const Paywall = styled.section`
-    min-height: 560px;
-    padding: 34px 24px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.lg};
-    background:
-            radial-gradient(circle at top left, rgba(124, 58, 237, 0.26), transparent 34%),
-            radial-gradient(circle at bottom right, rgba(239, 68, 68, 0.16), transparent 34%),
-            rgba(21, 25, 43, 0.88);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-
-    ${Subtitle} {
-        max-width: 560px;
-    }
-
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        min-height: 500px;
-        padding: 28px 18px;
-    }
-`;
-
-const IconBox = styled.div`
-    width: 82px;
-    height: 82px;
-    margin-bottom: 18px;
-    border-radius: 30px;
-    background: linear-gradient(135deg, #7c3aed, #2563eb, #ef4444);
-    color: white;
-    display: grid;
-    place-items: center;
-    font-size: 38px;
-    box-shadow: 0 24px 60px rgba(124, 58, 237, 0.32);
-`;
-
-const Benefits = styled.div`
-    width: min(560px, 100%);
-    margin-top: 26px;
-    display: grid;
-    gap: 10px;
-`;
-
-const Benefit = styled.div`
-    padding: 13px 14px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: 18px;
-    background: rgba(255, 255, 255, 0.045);
-    color: ${({ theme }) => theme.colors.text};
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    text-align: left;
-    font-weight: 700;
-
-    svg {
-        flex: 0 0 auto;
-        color: #c4b5fd;
-        font-size: 19px;
-    }
-`;
-
-const Actions = styled.div`
-    margin-top: 28px;
-    display: flex;
-    justify-content: center;
-    gap: 12px;
-    flex-wrap: wrap;
-`;
-
-const PrimaryButton = styled.button`
-    min-height: 48px;
-    padding: 0 18px;
-    border: none;
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: linear-gradient(135deg, #7c3aed, #2563eb);
-    color: white;
-    display: inline-flex;
-    align-items: center;
-    gap: 9px;
-    font-weight: 900;
-    box-shadow: 0 18px 44px rgba(124, 58, 237, 0.24);
-
-    &:hover {
-        filter: brightness(1.08);
-    }
-`;
-
-const SecondaryButton = styled.button`
-    min-height: 48px;
-    padding: 0 18px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(255, 255, 255, 0.06);
-    color: ${({ theme }) => theme.colors.text};
-    font-weight: 900;
-
-    &:hover {
-        background: rgba(255, 255, 255, 0.1);
-    }
-`;
-
-const SubscribeLink = styled(Link)`
-    min-height: 50px;
-    padding: 0 20px;
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: linear-gradient(135deg, #7c3aed, #ec4899);
-    color: white;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 900;
-    box-shadow: 0 18px 44px rgba(236, 72, 153, 0.22);
-
-    &:hover {
-        filter: brightness(1.08);
-    }
-`;
-
 const EmptyCard = styled.section`
     min-height: 440px;
     padding: 30px 22px;
     border: 1px solid ${({ theme }) => theme.colors.border};
     border-radius: ${({ theme }) => theme.radius.lg};
     background:
-            radial-gradient(circle at top left, rgba(236, 72, 153, 0.18), transparent 34%),
-            radial-gradient(circle at bottom right, rgba(124, 58, 237, 0.18), transparent 34%),
+            radial-gradient(circle at top left, rgba(124, 58, 237, 0.2), transparent 34%),
             rgba(21, 25, 43, 0.86);
     display: flex;
     flex-direction: column;
@@ -805,7 +545,7 @@ const EmptyCard = styled.section`
 
     > svg {
         margin-bottom: 16px;
-        color: #f9a8d4;
+        color: ${({ theme }) => theme.colors.primaryHover};
         font-size: 44px;
     }
 
@@ -829,9 +569,28 @@ const EmptyButton = styled.button`
     padding: 0 16px;
     border: none;
     border-radius: ${({ theme }) => theme.radius.full};
-    background: linear-gradient(135deg, #7c3aed, #ec4899);
+    background: linear-gradient(135deg, #7c3aed, #2563eb);
     color: white;
     font-weight: 900;
+
+    &:hover {
+        filter: brightness(1.08);
+    }
+`;
+
+const PrimaryButton = styled.button`
+    min-height: 48px;
+    margin-top: 22px;
+    padding: 0 18px;
+    border: none;
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: linear-gradient(135deg, #7c3aed, #2563eb);
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font-weight: 900;
+    box-shadow: 0 18px 44px rgba(124, 58, 237, 0.22);
 
     &:hover {
         filter: brightness(1.08);

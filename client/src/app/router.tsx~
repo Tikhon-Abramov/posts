@@ -22,7 +22,6 @@ import { SubscriptionPage } from '../pages/SubscriptionPage';
 import { MyPostsPage } from '../pages/MyPostsPage';
 import { NotificationsPage } from '../pages/NotificationsPage';
 import { PostDetailsPage } from '../pages/PostDetailsPage';
-import { SearchPage } from '../pages/SearchPage';
 
 import { AdminDashboardPage } from '../pages/admin/AdminDashboardPage';
 import { AdminPostsPage } from '../pages/admin/AdminPostsPage';
@@ -134,10 +133,6 @@ export const router = createBrowserRouter([
       {
         path: 'premium',
         element: <PremiumFeedPage />,
-      },
-      {
-        path: 'search',
-        element: <SearchPage />,
       },
       {
         path: 'posts/:postId',

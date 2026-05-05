@@ -1,3 +1,5 @@
+/* eslint-disable react-hooks/set-state-in-effect */
+
 import { useEffect, useMemo, useRef, useState } from 'react';
 import styled from 'styled-components';
 import {
@@ -67,18 +69,18 @@ export function HomePage() {
     const isLoadingMore = isFetching && loadedPosts.length > 0;
 
     useEffect(() => {
-        const items = data?.items || data?.posts || [];
-
         if (!data) {
             return;
         }
 
+        const items = data.items || data.posts || [];
+
         setLoadedPosts((currentPosts) => {
             if (!cursor) {
-                return mergePostsKeepingOrder(items, currentPosts);
+                return mergePostsKeepingFirstPriority(items, currentPosts);
             }
 
-            return mergePostsKeepingOrder(currentPosts, items);
+            return mergePostsKeepingFirstPriority(currentPosts, items);
         });
 
         setNextCursor(data.nextCursor);
@@ -93,7 +95,7 @@ export function HomePage() {
         }
 
         setLoadedPosts((currentPosts) =>
-            mergePostsKeepingOrder(latestItems, currentPosts)
+            mergePostsKeepingFirstPriority(latestItems, currentPosts)
         );
     }, [latestData]);
 
@@ -162,8 +164,10 @@ export function HomePage() {
     if (isFirstLoading) {
         return (
             <StateCard>
-                <FiGlobe />
+                <FiLoader />
+
                 <h1>Загружаем ленту</h1>
+
                 <p>Сейчас покажем свежие публичные фото и видео.</p>
             </StateCard>
         );
@@ -173,7 +177,9 @@ export function HomePage() {
         return (
             <StateCard>
                 <FiAlertCircle />
+
                 <h1>Не удалось загрузить ленту</h1>
+
                 <p>Проверьте подключение или попробуйте повторить загрузку.</p>
 
                 <PrimaryButton type="button" onClick={() => refetch()}>
@@ -208,9 +214,8 @@ export function HomePage() {
                     <FiSearch />
 
                     <input
-                        type="text"
                         value={searchQuery}
-                        placeholder="Поиск по обычной ленте: название, описание, автор..."
+                        placeholder="Поиск по названию, описанию, автору или ID..."
                         onChange={(event) => setSearchQuery(event.target.value)}
                     />
                 </SearchBox>
@@ -262,13 +267,15 @@ export function HomePage() {
                                 <span>Листайте ниже — посты подгрузятся автоматически</span>
                             </LoadingMore>
                         ) : (
-                            <EndMessage>Вы посмотрели все посты по текущим фильтрам</EndMessage>
+                            <EndMessage>
+                                Вы посмотрели все посты по текущим фильтрам
+                            </EndMessage>
                         )}
                     </LoadMoreAnchor>
                 </>
             ) : (
                 <EmptyCard>
-                    <FiSearch />
+                    <FiAlertCircle />
 
                     <h2>Постов не найдено</h2>
 
@@ -286,42 +293,48 @@ export function HomePage() {
     );
 }
 
-function mergePostsKeepingOrder(first: Post[], second: Post[]) {
-    const map = new Map<number, Post>();
+function mergePostsKeepingFirstPriority(first: Post[], second: Post[]) {
+    const result: Post[] = [];
+    const seen = new Set<number>();
 
     [...first, ...second].forEach((post) => {
-        map.set(post.id, post);
+        if (seen.has(post.id)) {
+            return;
+        }
+
+        seen.add(post.id);
+        result.push(post);
     });
 
-    return Array.from(map.values());
+    return result;
 }
 
 const Page = styled.div`
-  display: grid;
-  gap: 18px;
+    display: grid;
+    gap: 18px;
 `;
 
 const Hero = styled.section`
-  padding: 22px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: ${({ theme }) => theme.radius.lg};
-  background:
-    radial-gradient(circle at top left, rgba(124, 58, 237, 0.22), transparent 34%),
-    radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.16), transparent 34%),
-    rgba(21, 25, 43, 0.86);
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
+    padding: 22px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: ${({ theme }) => theme.radius.lg};
+    background:
+            radial-gradient(circle at top left, rgba(124, 58, 237, 0.22), transparent 34%),
+            radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.16), transparent 34%),
+            rgba(21, 25, 43, 0.86);
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 18px;
 
-  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-    flex-direction: column;
-    padding: 18px;
-  }
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        flex-direction: column;
+        padding: 18px;
+    }
 `;
 
 const HeroContent = styled.div`
-  min-width: 0;
+    min-width: 0;
 `;
 
 const Eyebrow = styled.div`

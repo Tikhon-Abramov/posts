@@ -1,6 +1,8 @@
-import { useMemo } from 'react';
-import { Link, useParams } from 'react-router-dom';
-import { useSelector } from 'react-redux';
+/* eslint-disable react-hooks/set-state-in-effect */
+
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useLocation, useParams } from 'react-router-dom';
+import { useDispatch, useSelector } from 'react-redux';
 import styled from 'styled-components';
 import {
     FiAlertCircle,
@@ -8,21 +10,128 @@ import {
     FiFileText,
     FiLoader,
     FiLock,
+    FiMessageCircle,
     FiRefreshCw,
+    FiSend,
     FiStar,
+    FiTrash2,
+    FiUser,
 } from 'react-icons/fi';
 
-import type { RootState } from '../app/store';
+import type { AppDispatch, RootState } from '../app/store';
+import { baseApi } from '../shared/api/baseApi';
+import { getMediaUrl } from '../shared/lib/getMediaUrl';
+import { openAuthModal } from '../entities/auth/slice/authSlice';
 import { useGetPostByIdQuery } from '../entities/post/api/postApi';
 import { PostCard } from '../entities/post/ui/PostCard';
 
+interface CommentAuthor {
+    id: number;
+    nickname: string;
+    avatarUrl: string | null;
+}
+
+interface CommentItem {
+    id: number;
+    postId: number;
+    author: CommentAuthor;
+    text: string;
+    createdAt: string;
+    updatedAt: string | null;
+}
+
+interface CommentsResponse {
+    items: CommentItem[];
+    comments: CommentItem[];
+    nextCursor: string | null;
+    hasMore: boolean;
+    page: number;
+    totalPages: number;
+}
+
+interface GetCommentsParams {
+    postId: number;
+    cursor?: string | null;
+    limit?: number;
+}
+
+interface CreateCommentDto {
+    postId: number;
+    text: string;
+}
+
+interface DeleteCommentDto {
+    postId: number;
+    commentId: number;
+}
+
+const COMMENTS_LIMIT = 20;
+
+const postCommentsApi = baseApi.injectEndpoints({
+    endpoints: (builder) => ({
+        getPostComments: builder.query<CommentsResponse, GetCommentsParams>({
+            query: ({ postId, cursor = null, limit = COMMENTS_LIMIT }) => ({
+                url: `/posts/${postId}/comments`,
+                params: {
+                    cursor,
+                    limit,
+                },
+            }),
+
+            providesTags: (result, _error, arg) => [
+                { type: 'Comment', id: `POST-${arg.postId}` },
+                ...(result?.items || []).map((comment) => ({
+                    type: 'Comment' as const,
+                    id: comment.id,
+                })),
+            ],
+        }),
+
+        createPostComment: builder.mutation<CommentItem, CreateCommentDto>({
+            query: ({ postId, text }) => ({
+                url: `/posts/${postId}/comments`,
+                method: 'POST',
+                body: {
+                    text,
+                },
+            }),
+
+            invalidatesTags: (_result, _error, arg) => [
+                { type: 'Comment', id: `POST-${arg.postId}` },
+                { type: 'Post', id: arg.postId },
+            ],
+        }),
+
+        deletePostComment: builder.mutation<{ message: string }, DeleteCommentDto>({
+            query: ({ postId, commentId }) => ({
+                url: `/posts/${postId}/comments/${commentId}`,
+                method: 'DELETE',
+            }),
+
+            invalidatesTags: (_result, _error, arg) => [
+                { type: 'Comment', id: `POST-${arg.postId}` },
+                { type: 'Post', id: arg.postId },
+            ],
+        }),
+    }),
+});
+
+const {
+    useGetPostCommentsQuery,
+    useCreatePostCommentMutation,
+    useDeletePostCommentMutation,
+} = postCommentsApi;
+
 export function PostDetailsPage() {
+    const dispatch = useDispatch<AppDispatch>();
+    const commentsRef = useRef<HTMLDivElement | null>(null);
+    const location = useLocation();
     const { postId } = useParams();
 
-    const { user } = useSelector((state: RootState) => state.auth);
+    const { accessToken, user } = useSelector((state: RootState) => state.auth);
 
     const postIdNumber = Number(postId);
-    const isValidPostId = Boolean(postId) && !Number.isNaN(postIdNumber);
+    const isValidPostId = Boolean(postId) && Number.isInteger(postIdNumber) && postIdNumber > 0;
 
     const {
         data: post,
@@ -54,6 +163,170 @@ export function PostDetailsPage() {
         return Boolean(user?.hasPremium);
     }, [post, user]);
 
+    const [commentText, setCommentText] = useState('');
+    const [commentCursor, setCommentCursor] = useState<string | null>(null);
+    const [loadedComments, setLoadedComments] = useState<CommentItem[]>([]);
+    const [commentsNextCursor, setCommentsNextCursor] = useState<string | null>(null);
+    const [commentsHasMore, setCommentsHasMore] = useState(true);
+    const [commentMessage, setCommentMessage] = useState('');
+
+    const {
+        data: commentsData,
+        isLoading: isCommentsLoading,
+        isFetching: isCommentsFetching,
+        isError: isCommentsError,
+        refetch: refetchComments,
+    } = useGetPostCommentsQuery(
+        {
+            postId: postIdNumber,
+            cursor: commentCursor,
+            limit: COMMENTS_LIMIT,
+        },
+        {
+            skip: !isValidPostId || !post || !canViewPremiumPost,
+        }
+    );
+
+    const [createPostComment, { isLoading: isCreatingComment }] =
+        useCreatePostCommentMutation();
+
+    const [deletePostComment, { isLoading: isDeletingComment }] =
+        useDeletePostCommentMutation();
+
+    useEffect(() => {
+        setCommentCursor(null);
+        setLoadedComments([]);
+        setCommentsNextCursor(null);
+        setCommentsHasMore(true);
+        setCommentText('');
+        setCommentMessage('');
+    }, [postIdNumber]);
+
+    useEffect(() => {
+        if (!commentsData) {
+            return;
+        }
+
+        const items = commentsData.items || commentsData.comments || [];
+
+        setLoadedComments((currentComments) => {
+            if (!commentCursor) {
+                return mergeCommentsKeepingFirstPriority(items, currentComments);
+            }
+
+            return mergeCommentsKeepingFirstPriority(currentComments, items);
+        });
+
+        setCommentsNextCursor(commentsData.nextCursor);
+        setCommentsHasMore(commentsData.hasMore);
+    }, [commentCursor, commentsData]);
+
+    useEffect(() => {
+        if (location.hash !== '#comments') {
+            return;
+        }
+
+        const timeoutId = window.setTimeout(() => {
+            commentsRef.current?.scrollIntoView({
+                behavior: 'smooth',
+                block: 'start',
+            });
+        }, 180);
+
+        return () => {
+            window.clearTimeout(timeoutId);
+        };
+    }, [location.hash, post, loadedComments.length]);
+
+    const canSendComment =
+        Boolean(accessToken) &&
+        commentText.trim().length > 0 &&
+        commentText.trim().length <= 1000 &&
+        !isCreatingComment;
+
+    const handleOpenAuth = () => {
+        dispatch(
+            openAuthModal({
+                mode: 'login',
+                reason: 'Чтобы оставить комментарий, нужно войти в аккаунт.',
+            })
+        );
+    };
+
+    const handleSubmitComment = async (event: FormEvent<HTMLFormElement>) => {
+        event.preventDefault();
+
+        setCommentMessage('');
+
+        if (!accessToken) {
+            handleOpenAuth();
+            return;
+        }
+
+        const normalizedText = commentText.trim();
+
+        if (!normalizedText) {
+            setCommentMessage('Комментарий не может быть пустым.');
+            return;
+        }
+
+        if (normalizedText.length > 1000) {
+            setCommentMessage('Комментарий не должен быть длиннее 1000 символов.');
+            return;
+        }
+
+        try {
+            const newComment = await createPostComment({
+                postId: postIdNumber,
+                text: normalizedText,
+            }).unwrap();
+
+            setCommentText('');
+            setCommentCursor(null);
+            setLoadedComments((currentComments) =>
+                mergeCommentsKeepingFirstPriority([newComment], currentComments)
+            );
+            setCommentMessage('');
+
+            refetch();
+            refetchComments();
+        } catch (error) {
+            setCommentMessage(getErrorMessage(error, 'Не удалось отправить комментарий.'));
+        }
+    };
+
+    const handleDeleteComment = async (commentId: number) => {
+        const isConfirmed = window.confirm('Удалить комментарий?');
+
+        if (!isConfirmed) {
+            return;
+        }
+
+        try {
+            await deletePostComment({
+                postId: postIdNumber,
+                commentId,
+            }).unwrap();
+
+            setLoadedComments((currentComments) =>
+                currentComments.filter((comment) => comment.id !== commentId)
+            );
+
+            refetch();
+            refetchComments();
+        } catch (error) {
+            window.alert(getErrorMessage(error, 'Не удалось удалить комментарий.'));
+        }
+    };
+
+    const handleLoadMoreComments = () => {
+        if (!commentsHasMore || isCommentsFetching || !commentsNextCursor) {
+            return;
+        }
+
+        setCommentCursor(commentsNextCursor);
+    };
+
     if (!isValidPostId) {
         return (
             <StateCard>
@@ -63,10 +336,7 @@ export function PostDetailsPage() {
 
                 <p>Ссылка на публикацию содержит неправильный идентификатор.</p>
 
-                <PrimaryLink to="/">
-                    <FiArrowLeft />
-                    Вернуться в ленту
-                </PrimaryLink>
+                <PrimaryLink to="/">Вернуться в ленту</PrimaryLink>
             </StateCard>
         );
     }
@@ -90,10 +360,7 @@ export function PostDetailsPage() {
 
                 <h1>Пост не найден</h1>
 
-                <p>
-                    Возможно, публикация была удалена администратором или mock-данные были
-                    сброшены.
-                </p>
+                <p>Возможно, публикация была удалена администратором.</p>
 
                 <Actions>
                     <PrimaryButton type="button" onClick={() => refetch()}>
@@ -101,10 +368,7 @@ export function PostDetailsPage() {
                         Повторить
                     </PrimaryButton>
 
-                    <SecondaryLink to="/">
-                        <FiArrowLeft />
-                        Вернуться в ленту
-                    </SecondaryLink>
+                    <SecondaryLink to="/">Вернуться в ленту</SecondaryLink>
                 </Actions>
             </StateCard>
         );
@@ -123,15 +387,9 @@ export function PostDetailsPage() {
                 </p>
 
                 <Actions>
-                    <PrimaryLink to="/subscription">
-                        <FiStar />
-                        Оформить подписку
-                    </PrimaryLink>
+                    <PrimaryLink to="/subscription">Оформить подписку</PrimaryLink>
 
-                    <SecondaryLink to="/">
-                        <FiArrowLeft />
-                        В ленту
-                    </SecondaryLink>
+                    <SecondaryLink to="/">В ленту</SecondaryLink>
                 </Actions>
             </StateCard>
         );
@@ -146,9 +404,8 @@ export function PostDetailsPage() {
                     <Title>{post.title || 'Пост без названия'}</Title>
 
                     <Subtitle>
-                        Отдельная страница поста. Теперь публикация загружается через
-                        `useGetPostByIdQuery`, поэтому страницу будет легко подключить к
-                        backend endpoint `/posts/:postId`.
+                        Отдельная страница поста с комментариями. Кнопка комментариев в
+                        ленте ведет сюда сразу к блоку обсуждения.
                     </Subtitle>
                 </HeroContent>
 
@@ -168,6 +425,140 @@ export function PostDetailsPage() {
             <ContentGrid>
                 <MainColumn>
                     <PostCard post={post} />
+
+                    <CommentsSection ref={commentsRef} id="comments">
+                        <CommentsHeader>
+                            <div>
+                                <Eyebrow>Обсуждение</Eyebrow>
+
+                                <CommentsTitle>
+                                    <FiMessageCircle />
+                                    Комментарии
+                                </CommentsTitle>
+                            </div>
+
+                            <CommentsCount>{loadedComments.length}</CommentsCount>
+                        </CommentsHeader>
+
+                        <CommentForm onSubmit={handleSubmitComment}>
+                            <CommentTextarea
+                                value={commentText}
+                                maxLength={1000}
+                                placeholder={
+                                    accessToken
+                                        ? 'Напишите комментарий...'
+                                        : 'Войдите в аккаунт, чтобы оставить комментарий'
+                                }
+                                disabled={!accessToken || isCreatingComment}
+                                onChange={(event) => setCommentText(event.target.value)}
+                            />
+
+                            <CommentFormFooter>
+                                <CommentHint>
+                                    {commentText.trim().length}/1000 символов
+                                </CommentHint>
+
+                                {accessToken ? (
+                                    <SendButton type="submit" disabled={!canSendComment}>
+                                        <FiSend />
+                                        {isCreatingComment ? 'Отправляем...' : 'Отправить'}
+                                    </SendButton>
+                                ) : (
+                                    <SendButton type="button" onClick={handleOpenAuth}>
+                                        Войти
+                                    </SendButton>
+                                )}
+                            </CommentFormFooter>
+
+                            {commentMessage && (
+                                <CommentError>
+                                    <FiAlertCircle />
+                                    {commentMessage}
+                                </CommentError>
+                            )}
+                        </CommentForm>
+
+                        {isCommentsLoading && !loadedComments.length ? (
+                            <CommentsState>
+                                <FiLoader />
+                                <span>Загружаем комментарии...</span>
+                            </CommentsState>
+                        ) : isCommentsError && !loadedComments.length ? (
+                            <CommentsState>
+                                <FiAlertCircle />
+                                <span>Не удалось загрузить комментарии.</span>
+                                <SmallButton type="button" onClick={() => refetchComments()}>
+                                    Повторить
+                                </SmallButton>
+                            </CommentsState>
+                        ) : loadedComments.length ? (
+                            <>
+                                <CommentsList>
+                                    {loadedComments.map((comment) => {
+                                        const avatarUrl = getMediaUrl(comment.author.avatarUrl);
+                                        const canDeleteComment =
+                                            user?.role === 'ADMIN' || user?.id === comment.author.id;
+
+                                        return (
+                                            <CommentCard key={comment.id}>
+                                                <CommentAvatar>
+                                                    {avatarUrl ? (
+                                                        <img src={avatarUrl} alt={comment.author.nickname} />
+                                                    ) : (
+                                                        <FiUser />
+                                                    )}
+                                                </CommentAvatar>
+
+                                                <CommentBody>
+                                                    <CommentTop>
+                                                        <CommentAuthor>@{comment.author.nickname}</CommentAuthor>
+
+                                                        <CommentDate>
+                                                            {new Date(comment.createdAt).toLocaleString('ru-RU')}
+                                                        </CommentDate>
+                                                    </CommentTop>
+
+                                                    <CommentText>{comment.text}</CommentText>
+
+                                                    {comment.updatedAt && (
+                                                        <CommentEdited>
+                                                            Изменено: {new Date(comment.updatedAt).toLocaleString('ru-RU')}
+                                                        </CommentEdited>
+                                                    )}
+                                                </CommentBody>
+
+                                                {canDeleteComment && (
+                                                    <DeleteCommentButton
+                                                        type="button"
+                                                        disabled={isDeletingComment}
+                                                        onClick={() => handleDeleteComment(comment.id)}
+                                                    >
+                                                        <FiTrash2 />
+                                                    </DeleteCommentButton>
+                                                )}
+                                            </CommentCard>
+                                        );
+                                    })}
+                                </CommentsList>
+
+                                {commentsHasMore && (
+                                    <LoadMoreCommentsButton
+                                        type="button"
+                                        disabled={isCommentsFetching}
+                                        onClick={handleLoadMoreComments}
+                                    >
+                                        {isCommentsFetching ? 'Загружаем...' : 'Показать еще'}
+                                    </LoadMoreCommentsButton>
+                                )}
+                            </>
+                        ) : (
+                            <CommentsEmpty>
+                                <FiMessageCircle />
+                                <strong>Комментариев пока нет</strong>
+                                <span>Будьте первым, кто начнет обсуждение.</span>
+                            </CommentsEmpty>
+                        )}
+                    </CommentsSection>
                 </MainColumn>
 
                 <SideColumn>
@@ -189,9 +580,7 @@ export function PostDetailsPage() {
 
                             <InfoItem>
                                 <strong>Лента</strong>
-                                <span>
-                  {post.visibility === 'PREMIUM' ? 'Premium' : 'Обычная'}
-                </span>
+                                <span>{post.visibility === 'PREMIUM' ? 'Premium' : 'Обычная'}</span>
                             </InfoItem>
 
                             <InfoItem>
@@ -219,261 +608,572 @@ export function PostDetailsPage() {
     );
 }
 
+function mergeCommentsKeepingFirstPriority(first: CommentItem[], second: CommentItem[]) {
+    const result: CommentItem[] = [];
+    const seen = new Set<number>();
+
+    [...first, ...second].forEach((comment) => {
+        if (seen.has(comment.id)) {
+            return;
+        }
+
+        seen.add(comment.id);
+        result.push(comment);
+    });
+
+    return result;
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+    if (
+        typeof error === 'object' &&
+        error !== null &&
+        'data' in error &&
+        typeof (error as { data?: { message?: unknown } }).data?.message === 'string'
+    ) {
+        return (error as { data: { message: string } }).data.message;
+    }
+
+    return fallback;
+}
+
 const Page = styled.div`
-    display: grid;
-    gap: 18px;
+  display: grid;
+  gap: 18px;
 `;
 
 const Hero = styled.section`
-    padding: 22px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.lg};
-    background:
-            radial-gradient(circle at top left, rgba(124, 58, 237, 0.24), transparent 34%),
-            radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.16), transparent 34%),
-            rgba(21, 25, 43, 0.86);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 18px;
+  padding: 22px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background:
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.24), transparent 34%),
+    radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.16), transparent 34%),
+    rgba(21, 25, 43, 0.86);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
 
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        align-items: flex-start;
-        flex-direction: column;
-        padding: 18px;
-    }
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 18px;
+  }
 `;
 
 const HeroContent = styled.div`
-    min-width: 0;
+  min-width: 0;
 `;
 
 const Eyebrow = styled.div`
-    margin-bottom: 8px;
-    color: ${({ theme }) => theme.colors.primaryHover};
-    font-size: 13px;
-    font-weight: 900;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
+  margin-bottom: 8px;
+  color: ${({ theme }) => theme.colors.primaryHover};
+  font-size: 13px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 `;
 
 const Title = styled.h1`
-    margin: 0;
-    font-size: clamp(30px, 5vw, 52px);
-    line-height: 0.96;
-    letter-spacing: -0.075em;
+  margin: 0;
+  font-size: clamp(30px, 5vw, 52px);
+  line-height: 0.96;
+  letter-spacing: -0.075em;
 `;
 
 const Subtitle = styled.p`
-    max-width: 720px;
-    margin: 12px 0 0;
-    color: ${({ theme }) => theme.colors.textMuted};
-    line-height: 1.65;
+  max-width: 720px;
+  margin: 12px 0 0;
+  color: ${({ theme }) => theme.colors.textMuted};
+  line-height: 1.65;
 `;
 
 const HeroActions = styled.div`
-    flex: 0 0 auto;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 9px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
 `;
 
 const BackLink = styled(Link)`
-    min-height: 46px;
-    padding: 0 16px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(255, 255, 255, 0.06);
-    color: ${({ theme }) => theme.colors.text};
-    display: inline-flex;
-    align-items: center;
-    gap: 9px;
-    font-weight: 900;
+  min-height: 46px;
+  padding: 0 16px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: rgba(255, 255, 255, 0.06);
+  color: ${({ theme }) => theme.colors.text};
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 900;
 
-    &:hover {
-        background: rgba(255, 255, 255, 0.1);
-    }
+  &:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
 `;
 
 const RefreshButton = styled.button`
-    min-height: 46px;
-    padding: 0 16px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(255, 255, 255, 0.06);
-    color: ${({ theme }) => theme.colors.text};
-    display: inline-flex;
-    align-items: center;
-    gap: 9px;
-    font-weight: 900;
+  min-height: 46px;
+  padding: 0 16px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: rgba(255, 255, 255, 0.06);
+  color: ${({ theme }) => theme.colors.text};
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 900;
 
-    &:hover:not(:disabled) {
-        background: rgba(255, 255, 255, 0.1);
-    }
+  &:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.1);
+  }
 
-    &:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-    }
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
 `;
 
 const ContentGrid = styled.div`
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 320px;
-    gap: 18px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 18px;
 
-    @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
-        grid-template-columns: 1fr;
-    }
+  @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
+    grid-template-columns: 1fr;
+  }
 `;
 
 const MainColumn = styled.div`
-    min-width: 0;
+  min-width: 0;
+  display: grid;
+  gap: 18px;
 `;
 
 const SideColumn = styled.aside`
-    min-width: 0;
-    display: grid;
-    align-content: start;
-    gap: 18px;
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 18px;
 `;
 
 const InfoCard = styled.section`
-    padding: 20px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.lg};
-    background: rgba(21, 25, 43, 0.84);
+  padding: 20px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background: rgba(21, 25, 43, 0.84);
 
-    > svg {
-        margin-bottom: 14px;
-        color: ${({ theme }) => theme.colors.primaryHover};
-        font-size: 34px;
-    }
+  > svg {
+    margin-bottom: 14px;
+    color: ${({ theme }) => theme.colors.primaryHover};
+    font-size: 34px;
+  }
 
-    h2 {
-        margin: 0 0 14px;
-        font-size: 24px;
-        letter-spacing: -0.05em;
-    }
+  h2 {
+    margin: 0 0 14px;
+    font-size: 24px;
+    letter-spacing: -0.05em;
+  }
 `;
 
 const PremiumCard = styled(InfoCard)`
-    border-color: rgba(236, 72, 153, 0.28);
-    background:
-            radial-gradient(circle at top left, rgba(236, 72, 153, 0.16), transparent 36%),
-            rgba(21, 25, 43, 0.84);
+  border-color: rgba(236, 72, 153, 0.28);
+  background:
+    radial-gradient(circle at top left, rgba(236, 72, 153, 0.16), transparent 36%),
+    rgba(21, 25, 43, 0.84);
 
-    > svg {
-        color: #f9a8d4;
-    }
+  > svg {
+    color: #f9a8d4;
+  }
 
-    p {
-        margin: 0;
-        color: ${({ theme }) => theme.colors.textMuted};
-        line-height: 1.6;
-    }
+  p {
+    margin: 0;
+    color: ${({ theme }) => theme.colors.textMuted};
+    line-height: 1.6;
+  }
 `;
 
 const InfoList = styled.div`
-    display: grid;
-    gap: 8px;
+  display: grid;
+  gap: 8px;
 `;
 
 const InfoItem = styled.div`
-    padding: 10px 12px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: 14px;
-    background: rgba(255, 255, 255, 0.035);
-    display: grid;
-    gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+  display: grid;
+  gap: 4px;
 
-    strong {
-        color: ${({ theme }) => theme.colors.text};
-        font-size: 12px;
-    }
+  strong {
+    color: ${({ theme }) => theme.colors.text};
+    font-size: 12px;
+  }
 
-    span {
-        color: ${({ theme }) => theme.colors.textMuted};
-        font-size: 13px;
-        line-height: 1.35;
-        word-break: break-word;
-    }
+  span {
+    color: ${({ theme }) => theme.colors.textMuted};
+    font-size: 13px;
+    line-height: 1.35;
+    word-break: break-word;
+  }
+`;
+
+const CommentsSection = styled.section`
+  scroll-margin-top: 20px;
+  padding: 18px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background: rgba(21, 25, 43, 0.84);
+  display: grid;
+  gap: 16px;
+`;
+
+const CommentsHeader = styled.div`
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+`;
+
+const CommentsTitle = styled.h2`
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 28px;
+  letter-spacing: -0.06em;
+
+  svg {
+    color: ${({ theme }) => theme.colors.primaryHover};
+  }
+`;
+
+const CommentsCount = styled.div`
+  min-width: 38px;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: rgba(124, 58, 237, 0.16);
+  color: #ddd6fe;
+  display: grid;
+  place-items: center;
+  font-weight: 950;
+`;
+
+const CommentForm = styled.form`
+  display: grid;
+  gap: 10px;
+`;
+
+const CommentTextarea = styled.textarea`
+  width: 100%;
+  min-height: 110px;
+  padding: 14px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: 18px;
+  outline: none;
+  resize: vertical;
+  background: rgba(255, 255, 255, 0.045);
+  color: ${({ theme }) => theme.colors.text};
+  line-height: 1.55;
+
+  &::placeholder {
+    color: rgba(156, 163, 183, 0.68);
+  }
+
+  &:focus {
+    border-color: rgba(139, 92, 246, 0.72);
+    box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.12);
+  }
+
+  &:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+  }
+`;
+
+const CommentFormFooter = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    align-items: stretch;
+    flex-direction: column;
+  }
+`;
+
+const CommentHint = styled.span`
+  color: ${({ theme }) => theme.colors.textMuted};
+  font-size: 13px;
+  font-weight: 800;
+`;
+
+const SendButton = styled.button`
+  min-height: 42px;
+  padding: 0 14px;
+  border: none;
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  color: white;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-weight: 900;
+
+  &:hover:not(:disabled) {
+    filter: brightness(1.08);
+  }
+
+  &:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+`;
+
+const CommentError = styled.div`
+  padding: 12px 13px;
+  border: 1px solid rgba(239, 68, 68, 0.34);
+  border-radius: 16px;
+  background: rgba(239, 68, 68, 0.1);
+  color: #fecaca;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 800;
+`;
+
+const CommentsList = styled.div`
+  display: grid;
+  gap: 10px;
+`;
+
+const CommentCard = styled.article`
+  padding: 12px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.04);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 11px;
+  align-items: flex-start;
+`;
+
+const CommentAvatar = styled.div`
+  width: 42px;
+  height: 42px;
+  overflow: hidden;
+  border-radius: 15px;
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  color: white;
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+`;
+
+const CommentBody = styled.div`
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+`;
+
+const CommentTop = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+`;
+
+const CommentAuthor = styled.strong`
+  color: ${({ theme }) => theme.colors.text};
+`;
+
+const CommentDate = styled.span`
+  color: ${({ theme }) => theme.colors.textMuted};
+  font-size: 12px;
+  font-weight: 700;
+`;
+
+const CommentText = styled.p`
+  margin: 0;
+  color: ${({ theme }) => theme.colors.text};
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+`;
+
+const CommentEdited = styled.span`
+  color: ${({ theme }) => theme.colors.textMuted};
+  font-size: 12px;
+  font-weight: 700;
+`;
+
+const DeleteCommentButton = styled.button`
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgba(239, 68, 68, 0.28);
+  border-radius: 14px;
+  background: rgba(239, 68, 68, 0.1);
+  color: #fecaca;
+  display: grid;
+  place-items: center;
+
+  &:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.16);
+  }
+
+  &:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+`;
+
+const CommentsState = styled.div`
+  min-height: 120px;
+  padding: 18px;
+  border: 1px dashed rgba(139, 92, 246, 0.32);
+  border-radius: 18px;
+  color: ${({ theme }) => theme.colors.textMuted};
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  text-align: center;
+  font-weight: 800;
+
+  svg {
+    color: ${({ theme }) => theme.colors.primaryHover};
+    font-size: 28px;
+  }
+`;
+
+const CommentsEmpty = styled(CommentsState)`
+  strong {
+    color: ${({ theme }) => theme.colors.text};
+  }
+
+  span {
+    color: ${({ theme }) => theme.colors.textMuted};
+  }
+`;
+
+const LoadMoreCommentsButton = styled.button`
+  min-height: 42px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: rgba(255, 255, 255, 0.055);
+  color: ${({ theme }) => theme.colors.text};
+  font-weight: 900;
+
+  &:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.09);
+  }
+
+  &:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+`;
+
+const SmallButton = styled.button`
+  min-height: 38px;
+  padding: 0 13px;
+  border: none;
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  color: white;
+  font-weight: 900;
 `;
 
 const StateCard = styled.section`
-    min-height: 420px;
-    padding: 30px 22px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.lg};
-    background:
-            radial-gradient(circle at top left, rgba(124, 58, 237, 0.2), transparent 34%),
-            rgba(21, 25, 43, 0.86);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
+  min-height: 420px;
+  padding: 30px 22px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background:
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.2), transparent 34%),
+    rgba(21, 25, 43, 0.86);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
 
-    > svg {
-        margin-bottom: 16px;
-        color: ${({ theme }) => theme.colors.primaryHover};
-        font-size: 44px;
-    }
+  > svg {
+    margin-bottom: 16px;
+    color: ${({ theme }) => theme.colors.primaryHover};
+    font-size: 44px;
+  }
 
-    h1 {
-        margin: 0 0 10px;
-        font-size: clamp(26px, 4vw, 40px);
-        letter-spacing: -0.06em;
-    }
+  h1 {
+    margin: 0 0 10px;
+    font-size: clamp(26px, 4vw, 40px);
+    letter-spacing: -0.06em;
+  }
 
-    p {
-        max-width: 520px;
-        margin: 0;
-        color: ${({ theme }) => theme.colors.textMuted};
-        line-height: 1.6;
-    }
+  p {
+    max-width: 520px;
+    margin: 0;
+    color: ${({ theme }) => theme.colors.textMuted};
+    line-height: 1.6;
+  }
 `;
 
 const Actions = styled.div`
-    margin-top: 24px;
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 12px;
+  margin-top: 24px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
 `;
 
 const PrimaryButton = styled.button`
-    min-height: 48px;
-    padding: 0 18px;
-    border: none;
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: linear-gradient(135deg, #7c3aed, #2563eb);
-    color: white;
-    display: inline-flex;
-    align-items: center;
-    gap: 9px;
-    font-weight: 900;
+  min-height: 48px;
+  padding: 0 18px;
+  border: none;
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  color: white;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 900;
 
-    &:hover {
-        filter: brightness(1.08);
-    }
+  &:hover {
+    filter: brightness(1.08);
+  }
 `;
 
 const PrimaryLink = styled(Link)`
-    min-height: 48px;
-    margin-top: 22px;
-    padding: 0 18px;
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: linear-gradient(135deg, #7c3aed, #2563eb);
-    color: white;
-    display: inline-flex;
-    align-items: center;
-    gap: 9px;
-    font-weight: 900;
+  min-height: 48px;
+  margin-top: 22px;
+  padding: 0 18px;
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  color: white;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 900;
 
-    &:hover {
-        filter: brightness(1.08);
-    }
+  &:hover {
+    filter: brightness(1.08);
+  }
 `;
 
 const SecondaryLink = styled(Link)`
