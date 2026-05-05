@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import styled from 'styled-components';
 import {
@@ -9,6 +9,7 @@ import {
     FiGlobe,
     FiHeart,
     FiImage,
+    FiLoader,
     FiMessageCircle,
     FiRefreshCw,
     FiSearch,
@@ -19,106 +20,120 @@ import {
 } from 'react-icons/fi';
 
 import type {
-    MediaType,
     Post,
     PostVisibility,
 } from '../../entities/post/model/postTypes';
 import {
-    getMockComments,
-    getMockPosts,
-    saveMockComments,
-    saveMockPosts,
-} from '../../shared/lib/mockStorage';
+    useDeleteAdminPostMutation,
+    useGetAdminPostsQuery,
+    useGetAdminPostsStatsQuery,
+} from '../../entities/admin/api/adminPostApi';
+import type { MediaFilter, SortMode } from '../../shared/lib/mockStorage';
+import { getMediaUrl } from '../../shared/lib/getMediaUrl';
 
 type VisibilityFilter = 'ALL' | PostVisibility;
-type MediaFilter = 'ALL' | MediaType;
-type SortMode = 'RECENT' | 'POPULAR';
+
+const POSTS_LIMIT = 12;
 
 export function AdminPostsPage() {
-    const [posts, setPosts] = useState<Post[]>([]);
+    const loadMoreRef = useRef<HTMLDivElement | null>(null);
+
     const [searchQuery, setSearchQuery] = useState('');
     const [visibilityFilter, setVisibilityFilter] =
         useState<VisibilityFilter>('ALL');
     const [mediaFilter, setMediaFilter] = useState<MediaFilter>('ALL');
     const [sortMode, setSortMode] = useState<SortMode>('RECENT');
 
-    const loadPosts = () => {
-        setPosts(getMockPosts());
-    };
+    const [cursor, setCursor] = useState<string | null>(null);
+    const [loadedPosts, setLoadedPosts] = useState<Post[]>([]);
+    const [nextCursor, setNextCursor] = useState<string | null>(null);
+    const [hasMore, setHasMore] = useState(true);
+
+    const {
+        data,
+        isLoading,
+        isFetching,
+        isError,
+        refetch: refetchPosts,
+    } = useGetAdminPostsQuery({
+        cursor,
+        limit: POSTS_LIMIT,
+        search: searchQuery,
+        visibility: visibilityFilter,
+        mediaType: mediaFilter,
+        sort: sortMode,
+    });
+
+    const {
+        data: stats,
+        isLoading: isStatsLoading,
+        refetch: refetchStats,
+    } = useGetAdminPostsStatsQuery();
+
+    const [deleteAdminPost, { isLoading: isDeleting }] =
+        useDeleteAdminPostMutation();
+
+    const isFirstLoading = isLoading && loadedPosts.length === 0;
+    const isLoadingMore = isFetching && loadedPosts.length > 0;
 
     useEffect(() => {
-        loadPosts();
-    }, []);
+        if (!data) {
+            return;
+        }
 
-    const filteredPosts = useMemo(() => {
-        const normalizedQuery = searchQuery.trim().toLowerCase();
+        const items = data.items || data.posts || [];
 
-        return posts
-            .filter((post) => {
-                if (
-                    visibilityFilter !== 'ALL' &&
-                    post.visibility !== visibilityFilter
-                ) {
-                    return false;
+        setLoadedPosts((currentPosts) => {
+            if (!cursor) {
+                return items;
+            }
+
+            return mergePostsKeepingOrder(currentPosts, items);
+        });
+
+        setNextCursor(data.nextCursor);
+        setHasMore(data.hasMore);
+    }, [cursor, data]);
+
+    useEffect(() => {
+        setCursor(null);
+        setLoadedPosts([]);
+        setNextCursor(null);
+        setHasMore(true);
+    }, [mediaFilter, searchQuery, sortMode, visibilityFilter]);
+
+    useEffect(() => {
+        const target = loadMoreRef.current;
+
+        if (!target) {
+            return;
+        }
+
+        const observer = new IntersectionObserver(
+            ([entry]) => {
+                if (!entry.isIntersecting) {
+                    return;
                 }
 
-                if (mediaFilter !== 'ALL' && post.media[0]?.type !== mediaFilter) {
-                    return false;
+                if (!hasMore || isFetching || !nextCursor) {
+                    return;
                 }
 
-                if (!normalizedQuery) {
-                    return true;
-                }
+                setCursor(nextCursor);
+            },
+            {
+                root: null,
+                rootMargin: '700px 0px',
+                threshold: 0,
+            }
+        );
 
-                const title = post.title?.toLowerCase() || '';
-                const description = post.description?.toLowerCase() || '';
-                const author = post.author.nickname.toLowerCase();
-                const id = String(post.id);
+        observer.observe(target);
 
-                return (
-                    title.includes(normalizedQuery) ||
-                    description.includes(normalizedQuery) ||
-                    author.includes(normalizedQuery) ||
-                    id.includes(normalizedQuery)
-                );
-            })
-            .sort((a, b) => {
-                if (sortMode === 'POPULAR') {
-                    const aScore = a.likesCount + a.commentsCount - a.dislikesCount;
-                    const bScore = b.likesCount + b.commentsCount - b.dislikesCount;
-
-                    return bScore - aScore;
-                }
-
-                return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-            });
-    }, [mediaFilter, posts, searchQuery, sortMode, visibilityFilter]);
-
-    const stats = useMemo(() => {
-        const publicPosts = posts.filter(
-            (post) => post.visibility === 'PUBLIC'
-        ).length;
-
-        const premiumPosts = posts.filter(
-            (post) => post.visibility === 'PREMIUM'
-        ).length;
-
-        const imagePosts = posts.filter(
-            (post) => post.media[0]?.type === 'IMAGE'
-        ).length;
-
-        const videoPosts = posts.filter(
-            (post) => post.media[0]?.type === 'VIDEO'
-        ).length;
-
-        return {
-            publicPosts,
-            premiumPosts,
-            imagePosts,
-            videoPosts,
-            total: posts.length,
+        return () => {
+            observer.disconnect();
         };
-    }, [posts]);
+    }, [hasMore, isFetching, nextCursor]);
 
     const resetFilters = () => {
         setSearchQuery('');
@@ -127,29 +142,37 @@ export function AdminPostsPage() {
         setSortMode('RECENT');
     };
 
-    const handleDeletePost = (postId: number) => {
-        const targetPost = posts.find((post) => post.id === postId);
+    const handleRefresh = () => {
+        setCursor(null);
+        setLoadedPosts([]);
+        setNextCursor(null);
+        setHasMore(true);
 
-        if (!targetPost) {
-            return;
-        }
+        refetchPosts();
+        refetchStats();
+    };
 
+    const handleDeletePost = async (post: Post) => {
         const isConfirmed = window.confirm(
-            `Удалить пост «${targetPost.title || 'Без названия'}»? Комментарии к нему тоже будут удалены.`
+            `Удалить пост «${post.title || 'Без названия'}»? Комментарии, реакции, сохранения и уведомления к нему тоже будут очищены.`
         );
 
         if (!isConfirmed) {
             return;
         }
 
-        const nextPosts = posts.filter((post) => post.id !== postId);
-        const nextComments = getMockComments().filter(
-            (comment) => comment.postId !== postId
-        );
+        try {
+            await deleteAdminPost(post.id).unwrap();
 
-        saveMockPosts(nextPosts);
-        saveMockComments(nextComments);
-        setPosts(nextPosts);
+            setLoadedPosts((currentPosts) =>
+                currentPosts.filter((item) => item.id !== post.id)
+            );
+
+            refetchPosts();
+            refetchStats();
+        } catch (error) {
+            window.alert(getErrorMessage(error, 'Не удалось удалить пост.'));
+        }
     };
 
     return (
@@ -161,9 +184,9 @@ export function AdminPostsPage() {
                     <Title>Посты</Title>
 
                     <Subtitle>
-                        Управление опубликованными материалами. Здесь можно искать посты,
-                        фильтровать обычную и Premium-ленту, смотреть статистику и удалять
-                        публикации.
+                        Управление опубликованными материалами. Список постов подгружается
+                        частями, а статистика берется отдельным запросом, поэтому счетчики
+                        не зависят от количества уже загруженных карточек.
                     </Subtitle>
                 </HeroContent>
 
@@ -173,7 +196,7 @@ export function AdminPostsPage() {
                         Создать пост
                     </CreateLink>
 
-                    <RefreshButton type="button" onClick={loadPosts}>
+                    <RefreshButton type="button" onClick={handleRefresh}>
                         <FiRefreshCw />
                         Обновить
                     </RefreshButton>
@@ -184,7 +207,7 @@ export function AdminPostsPage() {
                 <StatCard>
                     <FiFileText />
                     <div>
-                        <strong>{stats.total}</strong>
+                        <strong>{isStatsLoading ? '...' : stats?.total || 0}</strong>
                         <span>Всего постов</span>
                     </div>
                 </StatCard>
@@ -192,7 +215,7 @@ export function AdminPostsPage() {
                 <StatCard>
                     <FiGlobe />
                     <div>
-                        <strong>{stats.publicPosts}</strong>
+                        <strong>{isStatsLoading ? '...' : stats?.publicPosts || 0}</strong>
                         <span>Обычная лента</span>
                     </div>
                 </StatCard>
@@ -200,7 +223,7 @@ export function AdminPostsPage() {
                 <StatCard>
                     <FiStar />
                     <div>
-                        <strong>{stats.premiumPosts}</strong>
+                        <strong>{isStatsLoading ? '...' : stats?.premiumPosts || 0}</strong>
                         <span>Premium</span>
                     </div>
                 </StatCard>
@@ -208,7 +231,7 @@ export function AdminPostsPage() {
                 <StatCard>
                     <FiVideo />
                     <div>
-                        <strong>{stats.videoPosts}</strong>
+                        <strong>{isStatsLoading ? '...' : stats?.videosCount || 0}</strong>
                         <span>Видео</span>
                     </div>
                 </StatCard>
@@ -263,148 +286,216 @@ export function AdminPostsPage() {
                 </ResetButton>
             </Toolbar>
 
-            {filteredPosts.length ? (
-                <PostsList>
-                    {filteredPosts.map((post) => {
-                        const firstMedia = post.media[0];
+            {isFirstLoading ? (
+                <StateCard>
+                    <FiLoader />
 
-                        return (
-                            <PostRow key={post.id}>
-                                <Preview>
-                                    {firstMedia?.type === 'IMAGE' ? (
-                                        <img src={firstMedia.url} alt={post.title || 'Пост'} />
-                                    ) : firstMedia?.type === 'VIDEO' ? (
-                                        <VideoPreview>
-                                            <FiVideo />
-                                            <span>Видео</span>
-                                        </VideoPreview>
-                                    ) : (
-                                        <VideoPreview>
-                                            <FiImage />
-                                            <span>Без медиа</span>
-                                        </VideoPreview>
-                                    )}
+                    <h2>Загружаем посты</h2>
 
-                                    <VisibilityBadge $visibility={post.visibility}>
-                                        {post.visibility === 'PREMIUM' ? (
-                                            <>
-                                                <FiStar />
-                                                Premium
-                                            </>
-                                        ) : (
-                                            <>
-                                                <FiGlobe />
-                                                Public
-                                            </>
-                                        )}
-                                    </VisibilityBadge>
-                                </Preview>
+                    <p>Сейчас покажем опубликованные материалы.</p>
+                </StateCard>
+            ) : isError && !loadedPosts.length ? (
+                <StateCard>
+                    <FiAlertCircle />
 
-                                <PostBody>
-                                    <PostTop>
-                                        <PostTitleBlock>
-                                            <PostTitle>{post.title || 'Без названия'}</PostTitle>
+                    <h2>Не удалось загрузить посты</h2>
 
-                                            <PostMeta>
-                                                ID {post.id} •{' '}
-                                                {new Date(post.createdAt).toLocaleString('ru-RU')}
-                                            </PostMeta>
-                                        </PostTitleBlock>
+                    <p>Попробуйте повторить загрузку.</p>
 
-                                        <MediaBadge>
-                                            {firstMedia?.type === 'VIDEO' ? <FiVideo /> : <FiImage />}
-                                            {firstMedia?.type === 'VIDEO' ? 'Видео' : 'Фото'}
-                                        </MediaBadge>
-                                    </PostTop>
-
-                                    <Description>{post.description}</Description>
-
-                                    <AuthorBlock>
-                                        <AuthorAvatar>
-                                            {post.author.avatarUrl ? (
-                                                <img src={post.author.avatarUrl} alt={post.author.nickname} />
-                                            ) : (
-                                                <FiUser />
-                                            )}
-                                        </AuthorAvatar>
-
-                                        <div>
-                                            <strong>@{post.author.nickname}</strong>
-                                            <span>Автор публикации</span>
-                                        </div>
-                                    </AuthorBlock>
-
-                                    <InfoGrid>
-                                        <InfoItem>
-                                            <FiHeart />
-                                            <span>{post.likesCount} лайков</span>
-                                        </InfoItem>
-
-                                        <InfoItem>
-                                            <FiAlertCircle />
-                                            <span>{post.dislikesCount} дизлайков</span>
-                                        </InfoItem>
-
-                                        <InfoItem>
-                                            <FiMessageCircle />
-                                            <span>{post.commentsCount} комментариев</span>
-                                        </InfoItem>
-                                    </InfoGrid>
-
-                                    <Actions>
-                                        <OpenPostLink to={`/posts/${post.id}`}>
-                                            <FiExternalLink />
-                                            Открыть на сайте
-                                        </OpenPostLink>
-
-                                        <DeleteButton
-                                            type="button"
-                                            onClick={() => handleDeletePost(post.id)}
-                                        >
-                                            <FiTrash2 />
-                                            Удалить
-                                        </DeleteButton>
-                                    </Actions>
-                                </PostBody>
-                            </PostRow>
-                        );
-                    })}
-                </PostsList>
-            ) : posts.length ? (
-                <EmptyCard>
-                    <FiSearch />
-
-                    <h2>По фильтрам ничего не найдено</h2>
-
-                    <p>
-                        Попробуйте изменить поисковую фразу, ленту, тип медиа или сбросить
-                        фильтры.
-                    </p>
-
-                    <PrimaryButton type="button" onClick={resetFilters}>
-                        Сбросить фильтры
+                    <PrimaryButton type="button" onClick={handleRefresh}>
+                        Повторить
                     </PrimaryButton>
-                </EmptyCard>
+                </StateCard>
+            ) : loadedPosts.length ? (
+                <>
+                    <FeedMeta>
+                        <span>Загружено на странице: {loadedPosts.length}</span>
+
+                        {isLoadingMore && (
+                            <LoadingInline>
+                                <FiLoader />
+                                Подгружаем еще...
+                            </LoadingInline>
+                        )}
+                    </FeedMeta>
+
+                    <PostsList>
+                        {loadedPosts.map((post) => {
+                            const firstMedia = post.media[0];
+                            const mediaUrl = getMediaUrl(firstMedia?.url);
+                            const authorAvatarUrl = getMediaUrl(post.author.avatarUrl);
+
+                            return (
+                                <PostRow key={post.id}>
+                                    <Preview>
+                                        {firstMedia?.type === 'IMAGE' && mediaUrl ? (
+                                            <img src={mediaUrl} alt={post.title || 'Пост'} />
+                                        ) : firstMedia?.type === 'VIDEO' && mediaUrl ? (
+                                            <MediaVideo src={mediaUrl} controls />
+                                        ) : (
+                                            <VideoPreview>
+                                                {firstMedia?.type === 'VIDEO' ? <FiVideo /> : <FiImage />}
+                                                <span>Медиа недоступно</span>
+                                            </VideoPreview>
+                                        )}
+
+                                        <VisibilityBadge $visibility={post.visibility}>
+                                            {post.visibility === 'PREMIUM' ? (
+                                                <>
+                                                    <FiStar />
+                                                    Premium
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <FiGlobe />
+                                                    Public
+                                                </>
+                                            )}
+                                        </VisibilityBadge>
+                                    </Preview>
+
+                                    <PostBody>
+                                        <PostTop>
+                                            <PostTitleBlock>
+                                                <PostTitle>{post.title || 'Без названия'}</PostTitle>
+
+                                                <PostMeta>
+                                                    ID {post.id} •{' '}
+                                                    {new Date(post.createdAt).toLocaleString('ru-RU')}
+                                                </PostMeta>
+                                            </PostTitleBlock>
+
+                                            <MediaBadge>
+                                                {firstMedia?.type === 'VIDEO' ? <FiVideo /> : <FiImage />}
+                                                {firstMedia?.type === 'VIDEO' ? 'Видео' : 'Фото'}
+                                            </MediaBadge>
+                                        </PostTop>
+
+                                        {post.description ? (
+                                            <Description>{post.description}</Description>
+                                        ) : (
+                                            <DescriptionMuted>Описание не указано</DescriptionMuted>
+                                        )}
+
+                                        <AuthorBlock>
+                                            <AuthorAvatar>
+                                                {authorAvatarUrl ? (
+                                                    <img
+                                                        src={authorAvatarUrl}
+                                                        alt={post.author.nickname}
+                                                    />
+                                                ) : (
+                                                    <FiUser />
+                                                )}
+                                            </AuthorAvatar>
+
+                                            <div>
+                                                <strong>@{post.author.nickname}</strong>
+                                                <span>Автор публикации</span>
+                                            </div>
+                                        </AuthorBlock>
+
+                                        <InfoGrid>
+                                            <InfoItem>
+                                                <FiHeart />
+                                                <span>{post.likesCount} лайков</span>
+                                            </InfoItem>
+
+                                            <InfoItem>
+                                                <FiAlertCircle />
+                                                <span>{post.dislikesCount} дизлайков</span>
+                                            </InfoItem>
+
+                                            <InfoItem>
+                                                <FiMessageCircle />
+                                                <span>{post.commentsCount} комментариев</span>
+                                            </InfoItem>
+                                        </InfoGrid>
+
+                                        <Actions>
+                                            <OpenPostLink to={`/posts/${post.id}`}>
+                                                <FiExternalLink />
+                                                Открыть на сайте
+                                            </OpenPostLink>
+
+                                            <DeleteButton
+                                                type="button"
+                                                disabled={isDeleting}
+                                                onClick={() => handleDeletePost(post)}
+                                            >
+                                                <FiTrash2 />
+                                                {isDeleting ? 'Удаляем...' : 'Удалить'}
+                                            </DeleteButton>
+                                        </Actions>
+                                    </PostBody>
+                                </PostRow>
+                            );
+                        })}
+                    </PostsList>
+
+                    <LoadMoreAnchor ref={loadMoreRef}>
+                        {hasMore ? (
+                            <LoadingMore>
+                                <FiLoader />
+                                <span>Листайте ниже — посты подгрузятся автоматически</span>
+                            </LoadingMore>
+                        ) : (
+                            <EndMessage>
+                                Вы посмотрели все посты по текущим фильтрам
+                            </EndMessage>
+                        )}
+                    </LoadMoreAnchor>
+                </>
             ) : (
                 <EmptyCard>
                     <FiFileText />
 
-                    <h2>Постов пока нет</h2>
+                    <h2>Постов не найдено</h2>
 
                     <p>
-                        Создайте первый пост в админке или одобрите пользовательскую заявку.
+                        Создайте первый пост, одобрите пользовательскую заявку или измените
+                        текущие фильтры.
                     </p>
 
-                    <PrimaryLink to="/admin/posts/create">Создать пост</PrimaryLink>
+                    <Actions>
+                        <PrimaryLink to="/admin/posts/create">Создать пост</PrimaryLink>
+
+                        <PrimaryButton type="button" onClick={resetFilters}>
+                            Сбросить фильтры
+                        </PrimaryButton>
+                    </Actions>
                 </EmptyCard>
             )}
         </Page>
     );
 }
 
+function mergePostsKeepingOrder(first: Post[], second: Post[]) {
+    const map = new Map<number, Post>();
+
+    [...first, ...second].forEach((post) => {
+        map.set(post.id, post);
+    });
+
+    return Array.from(map.values());
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+    if (
+        typeof error === 'object' &&
+        error !== null &&
+        'data' in error &&
+        typeof (error as { data?: { message?: unknown } }).data?.message === 'string'
+    ) {
+        return (error as { data: { message: string } }).data.message;
+    }
+
+    return fallback;
+}
+
 const Page = styled.div`
-  display: grid;
-  gap: 18px;
+    display: grid;
+    gap: 18px;
 `;
 
 const Hero = styled.section`
@@ -448,7 +539,7 @@ const Title = styled.h1`
 `;
 
 const Subtitle = styled.p`
-    max-width: 720px;
+    max-width: 760px;
     margin: 12px 0 0;
     color: ${({ theme }) => theme.colors.textMuted};
     line-height: 1.65;
@@ -646,6 +737,39 @@ const ResetButton = styled.button`
     }
 `;
 
+const FeedMeta = styled.div`
+    padding: 0 4px;
+    color: ${({ theme }) => theme.colors.textMuted};
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 13px;
+    font-weight: 800;
+
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+`;
+
+const LoadingInline = styled.div`
+    color: ${({ theme }) => theme.colors.primaryHover};
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+
+    svg {
+        animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+        to {
+            transform: rotate(360deg);
+        }
+    }
+`;
+
 const PostsList = styled.div`
     display: grid;
     gap: 14px;
@@ -678,6 +802,15 @@ const Preview = styled.div`
     }
 `;
 
+const MediaVideo = styled.video`
+    width: 100%;
+    height: 100%;
+    min-height: 230px;
+    object-fit: cover;
+    display: block;
+    background: #05060d;
+`;
+
 const VideoPreview = styled.div`
     min-height: 230px;
     background:
@@ -693,6 +826,10 @@ const VideoPreview = styled.div`
 
     svg {
         font-size: 44px;
+    }
+
+    span {
+        color: ${({ theme }) => theme.colors.textMuted};
     }
 `;
 
@@ -770,6 +907,11 @@ const Description = styled.p`
     color: ${({ theme }) => theme.colors.textMuted};
     line-height: 1.6;
     white-space: pre-wrap;
+`;
+
+const DescriptionMuted = styled(Description)`
+    opacity: 0.68;
+    font-style: italic;
 `;
 
 const AuthorBlock = styled.div`
@@ -877,9 +1019,50 @@ const DeleteButton = styled.button`
     gap: 8px;
     font-weight: 900;
 
-    &:hover {
+    &:hover:not(:disabled) {
         background: rgba(239, 68, 68, 0.16);
     }
+
+    &:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+`;
+
+const LoadMoreAnchor = styled.div`
+    min-height: 80px;
+    display: grid;
+    place-items: center;
+`;
+
+const LoadingMore = styled.div`
+    padding: 12px 16px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: rgba(255, 255, 255, 0.045);
+    color: ${({ theme }) => theme.colors.textMuted};
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 13px;
+    font-weight: 900;
+
+    svg {
+        color: ${({ theme }) => theme.colors.primaryHover};
+        animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+        to {
+            transform: rotate(360deg);
+        }
+    }
+`;
+
+const EndMessage = styled.div`
+    color: ${({ theme }) => theme.colors.textMuted};
+    font-size: 13px;
+    font-weight: 800;
 `;
 
 const EmptyCard = styled.section`
@@ -916,6 +1099,18 @@ const EmptyCard = styled.section`
     }
 `;
 
+const StateCard = styled(EmptyCard)`
+    > svg {
+        animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+        to {
+            transform: rotate(360deg);
+        }
+    }
+`;
+
 const PrimaryButton = styled.button`
     min-height: 46px;
     margin-top: 22px;
@@ -932,17 +1127,17 @@ const PrimaryButton = styled.button`
 `;
 
 const PrimaryLink = styled(Link)`
-    min-height: 46px;
-    margin-top: 22px;
-    padding: 0 16px;
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: linear-gradient(135deg, #7c3aed, #2563eb);
-    color: white;
-    display: inline-flex;
-    align-items: center;
-    font-weight: 900;
+  min-height: 46px;
+  margin-top: 22px;
+  padding: 0 16px;
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  color: white;
+  display: inline-flex;
+  align-items: center;
+  font-weight: 900;
 
-    &:hover {
-        filter: brightness(1.08);
-    }
+  &:hover {
+    filter: brightness(1.08);
+  }
 `;

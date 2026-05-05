@@ -1,22 +1,37 @@
 import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
-import { API_URL } from '../config/constants';
+
 import type { RootState } from '../../app/store';
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3005/api';
+
 export const baseApi = createApi({
-  reducerPath: 'api',
+  reducerPath: 'baseApi',
+
   baseQuery: fetchBaseQuery({
     baseUrl: API_URL,
-    credentials: 'include',
-    prepareHeaders: (headers, { getState }) => {
-      const token = (getState() as RootState).auth.accessToken;
 
-      if (token) {
-        headers.set('authorization', `Bearer ${token}`);
+    prepareHeaders: (headers, { getState }) => {
+      const state = getState() as RootState;
+      const accessToken =
+          state.auth.accessToken || localStorage.getItem('accessToken');
+
+      if (accessToken) {
+        headers.set('Authorization', `Bearer ${accessToken}`);
       }
 
       return headers;
     },
   }),
-  tagTypes: ['Post', 'User', 'Comment', 'Request', 'Subscription'],
+
+  tagTypes: [
+    'Auth',
+    'User',
+    'Post',
+    'Comment',
+    'ContentRequest',
+    'Notification',
+    'Subscription',
+  ],
+
   endpoints: () => ({}),
 });

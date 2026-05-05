@@ -1,45 +1,64 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { useSelector } from 'react-redux';
+import { useEffect, useRef, useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
 import styled from 'styled-components';
 import {
     FiAlertCircle,
-    FiClock,
-    FiExternalLink,
     FiFileText,
     FiFilter,
     FiGlobe,
     FiImage,
+    FiInbox,
+    FiLoader,
+    FiLock,
     FiRefreshCw,
     FiSearch,
-    FiSend,
     FiStar,
+    FiUser,
     FiVideo,
 } from 'react-icons/fi';
 
-import type { RootState } from '../app/store';
-import type {
-    MediaType,
-    Post,
-    PostVisibility,
-} from '../entities/post/model/postTypes';
-import { PostGrid } from '../entities/post/ui/PostGrid';
+import type { AppDispatch, RootState } from '../app/store';
+import { openAuthModal } from '../entities/auth/slice/authSlice';
+import { PostCard } from '../entities/post/ui/PostCard';
+import type { Post } from '../entities/post/model/postTypes';
 import {
-    getMockContentRequests,
-    getMockPosts,
+    useGetMyPostsQuery,
+    useGetMyPostsStatsQuery,
+} from '../entities/post/api/postApi';
+import {
+    useGetMyContentRequestsQuery,
+    useGetMyContentRequestsStatsQuery,
+} from '../entities/content-request/api/contentRequestApi';
+import {
+    formatMockFileSize,
+    type MediaFilter,
     type MockContentRequest,
     type RequestStatus,
+    type RequestStatusFilter,
+    type SortMode,
 } from '../shared/lib/mockStorage';
+import { getMediaUrl } from '../shared/lib/getMediaUrl';
 
-type RequestStatusFilter = 'ALL' | RequestStatus;
-type MediaFilter = 'ALL' | MediaType;
-type SortMode = 'RECENT' | 'POPULAR';
+type TabMode = 'POSTS' | 'REQUESTS';
+
+type RequestWithFileUrl = MockContentRequest & {
+    fileUrl?: string | null;
+};
+
+const POSTS_LIMIT = 10;
+const REQUESTS_LIMIT = 10;
 
 export function MyPostsPage() {
-    const user = useSelector((state: RootState) => state.auth.user);
+    const dispatch = useDispatch<AppDispatch>();
 
-    const [posts, setPosts] = useState<Post[]>([]);
-    const [requests, setRequests] = useState<MockContentRequest[]>([]);
+    const postsLoadMoreRef = useRef<HTMLDivElement | null>(null);
+    const requestsLoadMoreRef = useRef<HTMLDivElement | null>(null);
+
+    const { accessToken, user } = useSelector((state: RootState) => state.auth);
+
+    const isAuth = Boolean(accessToken);
+
+    const [activeTab, setActiveTab] = useState<TabMode>('POSTS');
 
     const [postsSearchQuery, setPostsSearchQuery] = useState('');
     const [postsMediaFilter, setPostsMediaFilter] = useState<MediaFilter>('ALL');
@@ -51,132 +70,206 @@ export function MyPostsPage() {
     const [requestsMediaFilter, setRequestsMediaFilter] =
         useState<MediaFilter>('ALL');
 
-    const loadData = () => {
-        setPosts(getMockPosts());
-        setRequests(getMockContentRequests());
-    };
+    const [postsCursor, setPostsCursor] = useState<string | null>(null);
+    const [loadedPosts, setLoadedPosts] = useState<Post[]>([]);
+    const [postsNextCursor, setPostsNextCursor] = useState<string | null>(null);
+    const [postsHasMore, setPostsHasMore] = useState(true);
+
+    const [requestsCursor, setRequestsCursor] = useState<string | null>(null);
+    const [loadedRequests, setLoadedRequests] = useState<MockContentRequest[]>([]);
+    const [requestsNextCursor, setRequestsNextCursor] = useState<string | null>(
+        null
+    );
+    const [requestsHasMore, setRequestsHasMore] = useState(true);
+
+    const {
+        data: postsData,
+        isLoading: isPostsLoading,
+        isFetching: isPostsFetching,
+        isError: isPostsError,
+        refetch: refetchPosts,
+    } = useGetMyPostsQuery(
+        {
+            cursor: postsCursor,
+            limit: POSTS_LIMIT,
+            search: postsSearchQuery,
+            mediaType: postsMediaFilter,
+            sort: postsSortMode,
+        },
+        {
+            skip: !isAuth,
+        }
+    );
+
+    const {
+        data: postsStats,
+        isLoading: isPostsStatsLoading,
+        refetch: refetchPostsStats,
+    } = useGetMyPostsStatsQuery(undefined, {
+        skip: !isAuth,
+    });
+
+    const {
+        data: requestsData,
+        isLoading: isRequestsLoading,
+        isFetching: isRequestsFetching,
+        isError: isRequestsError,
+        refetch: refetchRequests,
+    } = useGetMyContentRequestsQuery(
+        {
+            cursor: requestsCursor,
+            limit: REQUESTS_LIMIT,
+            search: requestsSearchQuery,
+            status: requestsStatusFilter,
+            mediaType: requestsMediaFilter,
+        },
+        {
+            skip: !isAuth,
+        }
+    );
+
+    const {
+        data: requestsStats,
+        isLoading: isRequestsStatsLoading,
+        refetch: refetchRequestsStats,
+    } = useGetMyContentRequestsStatsQuery(undefined, {
+        skip: !isAuth,
+    });
+
+    const isFirstPostsLoading = isPostsLoading && loadedPosts.length === 0;
+    const isPostsLoadingMore = isPostsFetching && loadedPosts.length > 0;
+
+    const isFirstRequestsLoading =
+        isRequestsLoading && loadedRequests.length === 0;
+    const isRequestsLoadingMore =
+        isRequestsFetching && loadedRequests.length > 0;
 
     useEffect(() => {
-        loadData();
-    }, []);
-
-    const myPosts = useMemo(() => {
-        if (!user) {
-            return [];
+        if (!postsData) {
+            return;
         }
 
-        return posts.filter((post) => post.author.id === user.id);
-    }, [posts, user]);
+        const items = postsData.items || postsData.posts || [];
 
-    const filteredMyPosts = useMemo(() => {
-        const normalizedQuery = postsSearchQuery.trim().toLowerCase();
+        setLoadedPosts((currentPosts) => {
+            if (!postsCursor) {
+                return items;
+            }
 
-        return myPosts
-            .filter((post) => {
-                if (
-                    postsMediaFilter !== 'ALL' &&
-                    post.media[0]?.type !== postsMediaFilter
-                ) {
-                    return false;
-                }
+            return mergePostsKeepingOrder(currentPosts, items);
+        });
 
-                if (!normalizedQuery) {
-                    return true;
-                }
+        setPostsNextCursor(postsData.nextCursor);
+        setPostsHasMore(postsData.hasMore);
+    }, [postsCursor, postsData]);
 
-                const title = post.title?.toLowerCase() || '';
-                const description = post.description?.toLowerCase() || '';
-                const author = post.author.nickname.toLowerCase();
-
-                return (
-                    title.includes(normalizedQuery) ||
-                    description.includes(normalizedQuery) ||
-                    author.includes(normalizedQuery)
-                );
-            })
-            .sort((a, b) => {
-                if (postsSortMode === 'POPULAR') {
-                    const aScore = a.likesCount + a.commentsCount - a.dislikesCount;
-                    const bScore = b.likesCount + b.commentsCount - b.dislikesCount;
-
-                    return bScore - aScore;
-                }
-
-                return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-            });
-    }, [myPosts, postsMediaFilter, postsSearchQuery, postsSortMode]);
-
-    const myRequests = useMemo(() => {
-        if (!user) {
-            return [];
+    useEffect(() => {
+        if (!requestsData) {
+            return;
         }
 
-        return requests.filter((request) => request.userId === user.id);
-    }, [requests, user]);
+        const items = requestsData.items || requestsData.requests || [];
 
-    const filteredMyRequests = useMemo(() => {
-        const normalizedQuery = requestsSearchQuery.trim().toLowerCase();
+        setLoadedRequests((currentRequests) => {
+            if (!requestsCursor) {
+                return items;
+            }
 
-        return myRequests
-            .filter((request) => {
-                if (
-                    requestsStatusFilter !== 'ALL' &&
-                    request.status !== requestsStatusFilter
-                ) {
-                    return false;
+            return mergeRequestsKeepingOrder(currentRequests, items);
+        });
+
+        setRequestsNextCursor(requestsData.nextCursor);
+        setRequestsHasMore(requestsData.hasMore);
+    }, [requestsCursor, requestsData]);
+
+    useEffect(() => {
+        setPostsCursor(null);
+        setLoadedPosts([]);
+        setPostsNextCursor(null);
+        setPostsHasMore(true);
+    }, [postsMediaFilter, postsSearchQuery, postsSortMode]);
+
+    useEffect(() => {
+        setRequestsCursor(null);
+        setLoadedRequests([]);
+        setRequestsNextCursor(null);
+        setRequestsHasMore(true);
+    }, [requestsMediaFilter, requestsSearchQuery, requestsStatusFilter]);
+
+    useEffect(() => {
+        const target = postsLoadMoreRef.current;
+
+        if (!target) {
+            return;
+        }
+
+        const observer = new IntersectionObserver(
+            ([entry]) => {
+                if (!entry.isIntersecting) {
+                    return;
                 }
 
-                if (
-                    requestsMediaFilter !== 'ALL' &&
-                    request.mediaType !== requestsMediaFilter
-                ) {
-                    return false;
+                if (!postsHasMore || isPostsFetching || !postsNextCursor) {
+                    return;
                 }
 
-                if (!normalizedQuery) {
-                    return true;
-                }
+                setPostsCursor(postsNextCursor);
+            },
+            {
+                root: null,
+                rootMargin: '700px 0px',
+                threshold: 0,
+            }
+        );
 
-                const title = request.title.toLowerCase();
-                const description = request.description.toLowerCase();
-                const fileName = request.fileName.toLowerCase();
+        observer.observe(target);
 
-                return (
-                    title.includes(normalizedQuery) ||
-                    description.includes(normalizedQuery) ||
-                    fileName.includes(normalizedQuery)
-                );
-            })
-            .sort(
-                (a, b) =>
-                    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-            );
-    }, [
-        myRequests,
-        requestsMediaFilter,
-        requestsSearchQuery,
-        requestsStatusFilter,
-    ]);
-
-    const stats = useMemo(() => {
-        const publicPosts = myPosts.filter(
-            (post) => post.visibility === 'PUBLIC'
-        ).length;
-
-        const premiumPosts = myPosts.filter(
-            (post) => post.visibility === 'PREMIUM'
-        ).length;
-
-        const pendingRequests = myRequests.filter(
-            (request) => request.status === 'PENDING'
-        ).length;
-
-        return {
-            publicPosts,
-            premiumPosts,
-            pendingRequests,
+        return () => {
+            observer.disconnect();
         };
-    }, [myPosts, myRequests]);
+    }, [isPostsFetching, postsHasMore, postsNextCursor]);
+
+    useEffect(() => {
+        const target = requestsLoadMoreRef.current;
+
+        if (!target) {
+            return;
+        }
+
+        const observer = new IntersectionObserver(
+            ([entry]) => {
+                if (!entry.isIntersecting) {
+                    return;
+                }
+
+                if (!requestsHasMore || isRequestsFetching || !requestsNextCursor) {
+                    return;
+                }
+
+                setRequestsCursor(requestsNextCursor);
+            },
+            {
+                root: null,
+                rootMargin: '700px 0px',
+                threshold: 0,
+            }
+        );
+
+        observer.observe(target);
+
+        return () => {
+            observer.disconnect();
+        };
+    }, [isRequestsFetching, requestsHasMore, requestsNextCursor]);
+
+    const handleOpenAuth = () => {
+        dispatch(
+            openAuthModal({
+                mode: 'login',
+                reason: 'Чтобы открыть свои публикации, нужно войти в аккаунт.',
+            })
+        );
+    };
 
     const resetPostsFilters = () => {
         setPostsSearchQuery('');
@@ -190,31 +283,91 @@ export function MyPostsPage() {
         setRequestsMediaFilter('ALL');
     };
 
+    const refreshPosts = () => {
+        setPostsCursor(null);
+        setLoadedPosts([]);
+        setPostsNextCursor(null);
+        setPostsHasMore(true);
+
+        refetchPosts();
+        refetchPostsStats();
+    };
+
+    const refreshRequests = () => {
+        setRequestsCursor(null);
+        setLoadedRequests([]);
+        setRequestsNextCursor(null);
+        setRequestsHasMore(true);
+
+        refetchRequests();
+        refetchRequestsStats();
+    };
+
+    if (!isAuth || !user) {
+        return (
+            <StateCard>
+                <FiLock />
+
+                <h1>Нужна авторизация</h1>
+
+                <p>
+                    Войдите в аккаунт, чтобы смотреть свои опубликованные материалы и
+                    заявки на публикацию.
+                </p>
+
+                <PrimaryButton type="button" onClick={handleOpenAuth}>
+                    Войти в аккаунт
+                </PrimaryButton>
+            </StateCard>
+        );
+    }
+
     return (
         <Page>
             <Hero>
                 <HeroContent>
-                    <Eyebrow>Мой контент</Eyebrow>
+                    <Eyebrow>Мой аккаунт</Eyebrow>
 
                     <Title>Мои публикации</Title>
 
                     <Subtitle>
-                        Здесь отображаются посты, опубликованные от вашего имени после
-                        одобрения админом, а также история ваших заявок на публикацию.
+                        Здесь собраны ваши опубликованные посты и заявки на публикацию.
+                        Посты и заявки подгружаются частями, а счетчики берутся отдельными
+                        запросами.
                     </Subtitle>
                 </HeroContent>
 
-                <RefreshButton type="button" onClick={loadData}>
-                    <FiRefreshCw />
-                    Обновить
-                </RefreshButton>
+                <HeroUser>
+                    <HeroAvatar>
+                        {getMediaUrl(user.avatarUrl) ? (
+                            <img src={getMediaUrl(user.avatarUrl) || ''} alt={user.nickname} />
+                        ) : (
+                            <FiUser />
+                        )}
+                    </HeroAvatar>
+
+                    <HeroUserText>
+                        <strong>@{user.nickname}</strong>
+                        <span>{user.hasPremium ? 'Premium аккаунт' : 'Обычный аккаунт'}</span>
+                    </HeroUserText>
+                </HeroUser>
             </Hero>
 
             <StatsGrid>
                 <StatCard>
+                    <FiFileText />
+                    <div>
+                        <strong>{isPostsStatsLoading ? '...' : postsStats?.total || 0}</strong>
+                        <span>Публикаций</span>
+                    </div>
+                </StatCard>
+
+                <StatCard>
                     <FiGlobe />
                     <div>
-                        <strong>{stats.publicPosts}</strong>
+                        <strong>
+                            {isPostsStatsLoading ? '...' : postsStats?.publicPosts || 0}
+                        </strong>
                         <span>В обычной ленте</span>
                     </div>
                 </StatCard>
@@ -222,288 +375,416 @@ export function MyPostsPage() {
                 <StatCard>
                     <FiStar />
                     <div>
-                        <strong>{stats.premiumPosts}</strong>
+                        <strong>
+                            {isPostsStatsLoading ? '...' : postsStats?.premiumPosts || 0}
+                        </strong>
                         <span>В Premium</span>
                     </div>
                 </StatCard>
 
                 <StatCard>
-                    <FiClock />
+                    <FiInbox />
                     <div>
-                        <strong>{stats.pendingRequests}</strong>
-                        <span>На проверке</span>
+                        <strong>
+                            {isRequestsStatsLoading ? '...' : requestsStats?.total || 0}
+                        </strong>
+                        <span>Заявок</span>
                     </div>
                 </StatCard>
             </StatsGrid>
 
-            <Section>
-                <SectionHeader>
-                    <div>
-                        <Eyebrow>Опубликовано</Eyebrow>
-                        <h2>Посты от вашего имени</h2>
-                    </div>
+            <Tabs>
+                <TabButton
+                    type="button"
+                    $active={activeTab === 'POSTS'}
+                    onClick={() => setActiveTab('POSTS')}
+                >
+                    <FiFileText />
+                    Опубликованные посты
+                </TabButton>
 
-                    <Badge>{filteredMyPosts.length}</Badge>
-                </SectionHeader>
+                <TabButton
+                    type="button"
+                    $active={activeTab === 'REQUESTS'}
+                    onClick={() => setActiveTab('REQUESTS')}
+                >
+                    <FiInbox />
+                    Мои заявки
+                </TabButton>
+            </Tabs>
 
-                <Toolbar>
-                    <SearchBox>
-                        <FiSearch />
+            {activeTab === 'POSTS' ? (
+                <Section>
+                    <Toolbar>
+                        <SearchBox>
+                            <FiSearch />
 
-                        <input
-                            value={postsSearchQuery}
-                            placeholder="Поиск по моим постам: название, описание, автор..."
-                            onChange={(event) => setPostsSearchQuery(event.target.value)}
-                        />
-                    </SearchBox>
+                            <input
+                                value={postsSearchQuery}
+                                placeholder="Поиск по моим публикациям..."
+                                onChange={(event) => setPostsSearchQuery(event.target.value)}
+                            />
+                        </SearchBox>
 
-                    <Filters>
-                        <FilterSelect
-                            value={postsMediaFilter}
-                            onChange={(event) =>
-                                setPostsMediaFilter(event.target.value as MediaFilter)
-                            }
-                        >
-                            <option value="ALL">Фото и видео</option>
-                            <option value="IMAGE">Только фото</option>
-                            <option value="VIDEO">Только видео</option>
-                        </FilterSelect>
+                        <Filters>
+                            <FilterSelect
+                                value={postsMediaFilter}
+                                onChange={(event) =>
+                                    setPostsMediaFilter(event.target.value as MediaFilter)
+                                }
+                            >
+                                <option value="ALL">Фото и видео</option>
+                                <option value="IMAGE">Только фото</option>
+                                <option value="VIDEO">Только видео</option>
+                            </FilterSelect>
 
-                        <FilterSelect
-                            value={postsSortMode}
-                            onChange={(event) =>
-                                setPostsSortMode(event.target.value as SortMode)
-                            }
-                        >
-                            <option value="RECENT">Сначала новые</option>
-                            <option value="POPULAR">Сначала популярные</option>
-                        </FilterSelect>
-                    </Filters>
+                            <FilterSelect
+                                value={postsSortMode}
+                                onChange={(event) =>
+                                    setPostsSortMode(event.target.value as SortMode)
+                                }
+                            >
+                                <option value="RECENT">Сначала новые</option>
+                                <option value="POPULAR">Сначала популярные</option>
+                            </FilterSelect>
+                        </Filters>
 
-                    <ResetButton type="button" onClick={resetPostsFilters}>
-                        <FiFilter />
-                        Сбросить
-                    </ResetButton>
-                </Toolbar>
+                        <ToolbarActions>
+                            <ResetButton type="button" onClick={resetPostsFilters}>
+                                <FiFilter />
+                                Сбросить
+                            </ResetButton>
 
-                {filteredMyPosts.length ? (
-                    <PostGrid posts={filteredMyPosts} />
-                ) : myPosts.length ? (
-                    <EmptyCard>
-                        <FiSearch />
-                        <h3>По фильтрам ничего не найдено</h3>
-                        <p>
-                            Попробуйте изменить поисковую фразу, тип медиа или сбросить
-                            фильтры.
-                        </p>
+                            <RefreshButton type="button" onClick={refreshPosts}>
+                                <FiRefreshCw />
+                                Обновить
+                            </RefreshButton>
+                        </ToolbarActions>
+                    </Toolbar>
 
-                        <PrimaryButton type="button" onClick={resetPostsFilters}>
-                            Сбросить фильтры
-                        </PrimaryButton>
-                    </EmptyCard>
-                ) : (
-                    <EmptyCard>
-                        <FiFileText />
-                        <h3>Публикаций пока нет</h3>
-                        <p>
-                            Когда админ одобрит вашу заявку, опубликованный пост появится
-                            здесь и будет отображаться в ленте от вашего имени.
-                        </p>
+                    {isFirstPostsLoading ? (
+                        <StateCard>
+                            <FiLoader />
 
-                        <PrimaryLink to="/submit-content">
-                            <FiSend />
-                            Предложить пост
-                        </PrimaryLink>
-                    </EmptyCard>
-                )}
-            </Section>
+                            <h2>Загружаем публикации</h2>
 
-            <Section>
-                <SectionHeader>
-                    <div>
-                        <Eyebrow>История</Eyebrow>
-                        <h2>Мои заявки</h2>
-                    </div>
+                            <p>Сейчас покажем опубликованные вами посты.</p>
+                        </StateCard>
+                    ) : isPostsError && !loadedPosts.length ? (
+                        <StateCard>
+                            <FiAlertCircle />
 
-                    <Badge>{filteredMyRequests.length}</Badge>
-                </SectionHeader>
+                            <h2>Не удалось загрузить публикации</h2>
 
-                <Toolbar>
-                    <SearchBox>
-                        <FiSearch />
+                            <p>Попробуйте повторить загрузку.</p>
 
-                        <input
-                            value={requestsSearchQuery}
-                            placeholder="Поиск по заявкам: название, описание, файл..."
-                            onChange={(event) => setRequestsSearchQuery(event.target.value)}
-                        />
-                    </SearchBox>
+                            <PrimaryButton type="button" onClick={refreshPosts}>
+                                Повторить
+                            </PrimaryButton>
+                        </StateCard>
+                    ) : loadedPosts.length ? (
+                        <>
+                            <FeedMeta>
+                                <span>Загружено на странице: {loadedPosts.length}</span>
 
-                    <Filters>
-                        <FilterSelect
-                            value={requestsStatusFilter}
-                            onChange={(event) =>
-                                setRequestsStatusFilter(event.target.value as RequestStatusFilter)
-                            }
-                        >
-                            <option value="ALL">Все статусы</option>
-                            <option value="PENDING">На проверке</option>
-                            <option value="APPROVED">Одобрено</option>
-                            <option value="REJECTED">Отклонено</option>
-                        </FilterSelect>
+                                {isPostsLoadingMore && (
+                                    <LoadingInline>
+                                        <FiLoader />
+                                        Подгружаем еще...
+                                    </LoadingInline>
+                                )}
+                            </FeedMeta>
 
-                        <FilterSelect
-                            value={requestsMediaFilter}
-                            onChange={(event) =>
-                                setRequestsMediaFilter(event.target.value as MediaFilter)
-                            }
-                        >
-                            <option value="ALL">Фото и видео</option>
-                            <option value="IMAGE">Только фото</option>
-                            <option value="VIDEO">Только видео</option>
-                        </FilterSelect>
-                    </Filters>
+                            <PostsGrid>
+                                {loadedPosts.map((post) => (
+                                    <PostCard key={post.id} post={post} />
+                                ))}
+                            </PostsGrid>
 
-                    <ResetButton type="button" onClick={resetRequestsFilters}>
-                        <FiFilter />
-                        Сбросить
-                    </ResetButton>
-                </Toolbar>
+                            <LoadMoreAnchor ref={postsLoadMoreRef}>
+                                {postsHasMore ? (
+                                    <LoadingMore>
+                                        <FiLoader />
+                                        <span>Листайте ниже — посты подгрузятся автоматически</span>
+                                    </LoadingMore>
+                                ) : (
+                                    <EndMessage>
+                                        Вы посмотрели все свои публикации по текущим фильтрам
+                                    </EndMessage>
+                                )}
+                            </LoadMoreAnchor>
+                        </>
+                    ) : (
+                        <EmptyCard>
+                            <FiFileText />
 
-                {filteredMyRequests.length ? (
-                    <RequestsList>
-                        {filteredMyRequests.map((request) => (
-                            <RequestCard key={request.id}>
-                                <RequestPreview>
-                                    {request.mediaType === 'IMAGE' ? (
-                                        request.previewUrl ? (
-                                            <img src={request.previewUrl} alt={request.title} />
-                                        ) : (
-                                            <PreviewPlaceholder>
-                                                <FiImage />
-                                            </PreviewPlaceholder>
-                                        )
-                                    ) : (
-                                        <PreviewPlaceholder>
-                                            <FiVideo />
-                                        </PreviewPlaceholder>
-                                    )}
+                            <h2>Публикаций пока нет</h2>
 
-                                    <StatusBadge $status={request.status}>
-                                        {getStatusText(request.status)}
-                                    </StatusBadge>
-                                </RequestPreview>
+                            <p>
+                                Когда админ одобрит вашу заявку или вы опубликуете материал,
+                                пост появится здесь.
+                            </p>
+                        </EmptyCard>
+                    )}
+                </Section>
+            ) : (
+                <Section>
+                    <RequestsStatsRow>
+                        <MiniStat>
+                            <strong>{isRequestsStatsLoading ? '...' : requestsStats?.pending || 0}</strong>
+                            <span>На проверке</span>
+                        </MiniStat>
 
-                                <RequestBody>
-                                    <RequestTop>
-                                        <div>
-                                            <RequestTitle>{request.title}</RequestTitle>
+                        <MiniStat>
+                            <strong>{isRequestsStatsLoading ? '...' : requestsStats?.approved || 0}</strong>
+                            <span>Одобрено</span>
+                        </MiniStat>
 
-                                            <RequestMeta>
-                                                {new Date(request.createdAt).toLocaleString('ru-RU')}
-                                            </RequestMeta>
-                                        </div>
+                        <MiniStat>
+                            <strong>{isRequestsStatsLoading ? '...' : requestsStats?.rejected || 0}</strong>
+                            <span>Отклонено</span>
+                        </MiniStat>
+                    </RequestsStatsRow>
 
-                                        <VisibilityBadge $visibility={request.suggestedVisibility}>
-                                            {request.suggestedVisibility === 'PREMIUM' ? (
-                                                <>
-                                                    <FiStar />
-                                                    Premium
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <FiGlobe />
-                                                    Обычная
-                                                </>
-                                            )}
-                                        </VisibilityBadge>
-                                    </RequestTop>
+                    <Toolbar>
+                        <SearchBox>
+                            <FiSearch />
 
-                                    <Description>{request.description}</Description>
+                            <input
+                                value={requestsSearchQuery}
+                                placeholder="Поиск по моим заявкам..."
+                                onChange={(event) => setRequestsSearchQuery(event.target.value)}
+                            />
+                        </SearchBox>
 
-                                    <InfoGrid>
-                                        <InfoItem>
-                                            <strong>Файл</strong>
-                                            <span>{request.fileName}</span>
-                                        </InfoItem>
+                        <Filters>
+                            <FilterSelect
+                                value={requestsStatusFilter}
+                                onChange={(event) =>
+                                    setRequestsStatusFilter(
+                                        event.target.value as RequestStatusFilter
+                                    )
+                                }
+                            >
+                                <option value="ALL">Все статусы</option>
+                                <option value="PENDING">На проверке</option>
+                                <option value="APPROVED">Одобрено</option>
+                                <option value="REJECTED">Отклонено</option>
+                            </FilterSelect>
 
-                                        <InfoItem>
-                                            <strong>Тип</strong>
-                                            <span>
-                        {request.mediaType === 'IMAGE' ? 'Фото' : 'Видео'}
-                      </span>
-                                        </InfoItem>
+                            <FilterSelect
+                                value={requestsMediaFilter}
+                                onChange={(event) =>
+                                    setRequestsMediaFilter(event.target.value as MediaFilter)
+                                }
+                            >
+                                <option value="ALL">Фото и видео</option>
+                                <option value="IMAGE">Только фото</option>
+                                <option value="VIDEO">Только видео</option>
+                            </FilterSelect>
+                        </Filters>
 
-                                        {request.reviewedAt && (
-                                            <InfoItem>
-                                                <strong>Проверено</strong>
-                                                <span>
-                          {new Date(request.reviewedAt).toLocaleString('ru-RU')}
-                        </span>
-                                            </InfoItem>
-                                        )}
+                        <ToolbarActions>
+                            <ResetButton type="button" onClick={resetRequestsFilters}>
+                                <FiFilter />
+                                Сбросить
+                            </ResetButton>
 
-                                        {request.publishedPostId && (
-                                            <InfoItem>
-                                                <strong>ID поста</strong>
-                                                <span>{request.publishedPostId}</span>
-                                            </InfoItem>
-                                        )}
-                                    </InfoGrid>
+                            <RefreshButton type="button" onClick={refreshRequests}>
+                                <FiRefreshCw />
+                                Обновить
+                            </RefreshButton>
+                        </ToolbarActions>
+                    </Toolbar>
 
-                                    <RequestActions>
-                                        {request.publishedPostId ? (
-                                            <OpenPostLink to={`/posts/${request.publishedPostId}`}>
-                                                <FiExternalLink />
-                                                Открыть опубликованный пост
-                                            </OpenPostLink>
-                                        ) : request.status === 'PENDING' ? (
-                                            <PendingNote>
-                                                <FiClock />
-                                                Заявка ожидает решения администратора
-                                            </PendingNote>
-                                        ) : (
-                                            <RejectedNote>
-                                                <FiAlertCircle />
-                                                Пост не был опубликован
-                                            </RejectedNote>
-                                        )}
-                                    </RequestActions>
-                                </RequestBody>
-                            </RequestCard>
-                        ))}
-                    </RequestsList>
-                ) : myRequests.length ? (
-                    <EmptyCard>
-                        <FiSearch />
-                        <h3>По фильтрам ничего не найдено</h3>
-                        <p>
-                            Попробуйте изменить поисковую фразу, статус заявки, тип медиа или
-                            сбросить фильтры.
-                        </p>
+                    {isFirstRequestsLoading ? (
+                        <StateCard>
+                            <FiLoader />
 
-                        <PrimaryButton type="button" onClick={resetRequestsFilters}>
-                            Сбросить фильтры
-                        </PrimaryButton>
-                    </EmptyCard>
-                ) : (
-                    <EmptyCard>
-                        <FiAlertCircle />
-                        <h3>Заявок пока нет</h3>
-                        <p>
-                            Вы еще не отправляли материалы на публикацию. Создайте заявку, и
-                            она появится в этом списке.
-                        </p>
+                            <h2>Загружаем заявки</h2>
 
-                        <PrimaryLink to="/submit-content">
-                            <FiSend />
-                            Создать заявку
-                        </PrimaryLink>
-                    </EmptyCard>
-                )}
-            </Section>
+                            <p>Сейчас покажем материалы, которые вы отправили админу.</p>
+                        </StateCard>
+                    ) : isRequestsError && !loadedRequests.length ? (
+                        <StateCard>
+                            <FiAlertCircle />
+
+                            <h2>Не удалось загрузить заявки</h2>
+
+                            <p>Попробуйте повторить загрузку.</p>
+
+                            <PrimaryButton type="button" onClick={refreshRequests}>
+                                Повторить
+                            </PrimaryButton>
+                        </StateCard>
+                    ) : loadedRequests.length ? (
+                        <>
+                            <FeedMeta>
+                                <span>Загружено на странице: {loadedRequests.length}</span>
+
+                                {isRequestsLoadingMore && (
+                                    <LoadingInline>
+                                        <FiLoader />
+                                        Подгружаем еще...
+                                    </LoadingInline>
+                                )}
+                            </FeedMeta>
+
+                            <RequestsGrid>
+                                {loadedRequests.map((request) => {
+                                    const previewUrl = getRequestPreviewUrl(request);
+
+                                    return (
+                                        <RequestCard key={request.id}>
+                                            <Preview>
+                                                {request.mediaType === 'IMAGE' ? (
+                                                    previewUrl ? (
+                                                        <img src={previewUrl} alt={request.title} />
+                                                    ) : (
+                                                        <PreviewPlaceholder>
+                                                            <FiImage />
+                                                            <span>Изображение без preview</span>
+                                                        </PreviewPlaceholder>
+                                                    )
+                                                ) : previewUrl ? (
+                                                    <MediaVideo src={previewUrl} controls />
+                                                ) : (
+                                                    <PreviewPlaceholder>
+                                                        <FiVideo />
+                                                        <span>Видео: {request.fileName}</span>
+                                                    </PreviewPlaceholder>
+                                                )}
+
+                                                <StatusBadge $status={request.status}>
+                                                    {getStatusText(request.status)}
+                                                </StatusBadge>
+                                            </Preview>
+
+                                            <RequestBody>
+                                                <RequestHeader>
+                                                    <RequestTitle>{request.title}</RequestTitle>
+
+                                                    <MediaBadge>
+                                                        {request.mediaType === 'IMAGE' ? (
+                                                            <FiImage />
+                                                        ) : (
+                                                            <FiVideo />
+                                                        )}
+                                                        {request.mediaType === 'IMAGE' ? 'Фото' : 'Видео'}
+                                                    </MediaBadge>
+                                                </RequestHeader>
+
+                                                {request.description ? (
+                                                    <RequestDescription>
+                                                        {request.description}
+                                                    </RequestDescription>
+                                                ) : (
+                                                    <MutedDescription>Описание не указано</MutedDescription>
+                                                )}
+
+                                                <InfoList>
+                                                    <InfoItem>
+                                                        <strong>Предложено для:</strong>
+                                                        <span>
+                              {request.suggestedVisibility === 'PREMIUM'
+                                  ? 'Premium'
+                                  : 'Обычной ленты'}
+                            </span>
+                                                    </InfoItem>
+
+                                                    <InfoItem>
+                                                        <strong>Файл:</strong>
+                                                        <span>{request.fileName}</span>
+                                                    </InfoItem>
+
+                                                    <InfoItem>
+                                                        <strong>Размер:</strong>
+                                                        <span>{formatMockFileSize(request.fileSize)}</span>
+                                                    </InfoItem>
+
+                                                    <InfoItem>
+                                                        <strong>Создано:</strong>
+                                                        <span>
+                              {new Date(request.createdAt).toLocaleString('ru-RU')}
+                            </span>
+                                                    </InfoItem>
+
+                                                    {request.reviewedAt && (
+                                                        <InfoItem>
+                                                            <strong>Проверено:</strong>
+                                                            <span>
+                                {new Date(request.reviewedAt).toLocaleString(
+                                    'ru-RU'
+                                )}
+                              </span>
+                                                        </InfoItem>
+                                                    )}
+
+                                                    {request.publishedPostId && (
+                                                        <InfoItem>
+                                                            <strong>ID поста:</strong>
+                                                            <span>{request.publishedPostId}</span>
+                                                        </InfoItem>
+                                                    )}
+                                                </InfoList>
+                                            </RequestBody>
+                                        </RequestCard>
+                                    );
+                                })}
+                            </RequestsGrid>
+
+                            <LoadMoreAnchor ref={requestsLoadMoreRef}>
+                                {requestsHasMore ? (
+                                    <LoadingMore>
+                                        <FiLoader />
+                                        <span>Листайте ниже — заявки подгрузятся автоматически</span>
+                                    </LoadingMore>
+                                ) : (
+                                    <EndMessage>
+                                        Вы посмотрели все свои заявки по текущим фильтрам
+                                    </EndMessage>
+                                )}
+                            </LoadMoreAnchor>
+                        </>
+                    ) : (
+                        <EmptyCard>
+                            <FiInbox />
+
+                            <h2>Заявок пока нет</h2>
+
+                            <p>
+                                Когда вы отправите фото или видео на проверку, заявка появится
+                                здесь.
+                            </p>
+                        </EmptyCard>
+                    )}
+                </Section>
+            )}
         </Page>
     );
+}
+
+function mergePostsKeepingOrder(first: Post[], second: Post[]) {
+    const map = new Map<number, Post>();
+
+    [...first, ...second].forEach((post) => {
+        map.set(post.id, post);
+    });
+
+    return Array.from(map.values());
+}
+
+function mergeRequestsKeepingOrder(
+    first: MockContentRequest[],
+    second: MockContentRequest[]
+) {
+    const map = new Map<number, MockContentRequest>();
+
+    [...first, ...second].forEach((request) => {
+        map.set(request.id, request);
+    });
+
+    return Array.from(map.values());
 }
 
 function getStatusText(status: RequestStatus) {
@@ -516,6 +797,12 @@ function getStatusText(status: RequestStatus) {
     }
 
     return 'Отклонено';
+}
+
+function getRequestPreviewUrl(request: MockContentRequest) {
+    const requestWithFileUrl = request as RequestWithFileUrl;
+
+    return getMediaUrl(request.previewUrl || requestWithFileUrl.fileUrl || null);
 }
 
 const Page = styled.div`
@@ -564,36 +851,74 @@ const Title = styled.h1`
 `;
 
 const Subtitle = styled.p`
-    max-width: 720px;
+    max-width: 760px;
     margin: 12px 0 0;
     color: ${({ theme }) => theme.colors.textMuted};
     line-height: 1.65;
 `;
 
-const RefreshButton = styled.button`
+const HeroUser = styled.div`
     flex: 0 0 auto;
-    min-height: 46px;
-    padding: 0 16px;
+    min-width: 230px;
+    padding: 13px;
     border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(255, 255, 255, 0.06);
-    color: ${({ theme }) => theme.colors.text};
-    display: inline-flex;
+    border-radius: 22px;
+    background: rgba(255, 255, 255, 0.04);
+    display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 9px;
-    font-weight: 900;
+    gap: 11px;
 
-    &:hover {
-        background: rgba(255, 255, 255, 0.1);
-        border-color: rgba(139, 92, 246, 0.46);
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        width: 100%;
+        min-width: 0;
+    }
+`;
+
+const HeroAvatar = styled.div`
+    flex: 0 0 auto;
+    width: 52px;
+    height: 52px;
+    overflow: hidden;
+    border-radius: 18px;
+    background: linear-gradient(135deg, #7c3aed, #2563eb);
+    color: white;
+    display: grid;
+    place-items: center;
+    font-size: 24px;
+
+    img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+`;
+
+const HeroUserText = styled.div`
+    min-width: 0;
+    display: grid;
+    gap: 3px;
+
+    strong {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    span {
+        color: ${({ theme }) => theme.colors.textMuted};
+        font-size: 12px;
+        font-weight: 800;
     }
 `;
 
 const StatsGrid = styled.div`
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 14px;
+
+    @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
 
     @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
         grid-template-columns: 1fr;
@@ -619,7 +944,6 @@ const StatCard = styled.article`
     }
 
     div {
-        min-width: 0;
         display: grid;
         gap: 2px;
     }
@@ -637,39 +961,50 @@ const StatCard = styled.article`
     }
 `;
 
-const Section = styled.section`
-    display: grid;
-    gap: 14px;
-`;
-
-const SectionHeader = styled.div`
-    padding: 18px 20px;
+const Tabs = styled.div`
+    padding: 8px;
     border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.lg};
-    background: rgba(21, 25, 43, 0.78);
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: rgba(21, 25, 43, 0.76);
     display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 14px;
+    gap: 8px;
 
-    h2 {
-        margin: 4px 0 0;
-        font-size: 25px;
-        letter-spacing: -0.055em;
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        border-radius: 22px;
+        flex-direction: column;
     }
 `;
 
-const Badge = styled.div`
-    min-width: 40px;
-    height: 40px;
-    padding: 0 12px;
+const TabButton = styled.button<{ $active?: boolean }>`
+    flex: 1;
+    min-height: 46px;
+    padding: 0 16px;
+    border: 1px solid
+    ${({ theme, $active }) =>
+            $active ? 'rgba(139, 92, 246, 0.58)' : theme.colors.border};
     border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(124, 58, 237, 0.14);
-    color: ${({ theme }) => theme.colors.primaryHover};
+    background: ${({ $active }) =>
+            $active
+                    ? 'linear-gradient(135deg, rgba(124, 58, 237, 0.82), rgba(37, 99, 235, 0.72))'
+                    : 'rgba(255, 255, 255, 0.045)'};
+    color: ${({ theme }) => theme.colors.text};
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    gap: 9px;
     font-weight: 900;
+
+    &:hover {
+        background: ${({ $active }) =>
+                $active
+                        ? 'linear-gradient(135deg, rgba(124, 58, 237, 0.9), rgba(37, 99, 235, 0.8))'
+                        : 'rgba(255, 255, 255, 0.08)'};
+    }
+`;
+
+const Section = styled.section`
+    display: grid;
+    gap: 16px;
 `;
 
 const Toolbar = styled.div`
@@ -752,6 +1087,16 @@ const FilterSelect = styled.select`
     }
 `;
 
+const ToolbarActions = styled.div`
+    display: flex;
+    gap: 8px;
+
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        display: grid;
+        grid-template-columns: 1fr;
+    }
+`;
+
 const ResetButton = styled.button`
     min-height: 46px;
     padding: 0 16px;
@@ -771,73 +1116,77 @@ const ResetButton = styled.button`
     }
 `;
 
-const EmptyCard = styled.div`
-    min-height: 300px;
-    padding: 28px 20px;
-    border: 1px dashed rgba(139, 92, 246, 0.34);
-    border-radius: ${({ theme }) => theme.radius.lg};
-    background:
-            radial-gradient(circle at top left, rgba(124, 58, 237, 0.15), transparent 34%),
-            rgba(21, 25, 43, 0.72);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
+const RefreshButton = styled(ResetButton)``;
 
-    > svg {
-        margin-bottom: 14px;
-        color: ${({ theme }) => theme.colors.primaryHover};
-        font-size: 40px;
-    }
+const RequestsStatsRow = styled.div`
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
 
-    h3 {
-        margin: 0 0 8px;
-        font-size: clamp(24px, 4vw, 34px);
-        letter-spacing: -0.06em;
-    }
-
-    p {
-        max-width: 520px;
-        margin: 0;
-        color: ${({ theme }) => theme.colors.textMuted};
-        line-height: 1.6;
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        grid-template-columns: 1fr;
     }
 `;
 
-const PrimaryLink = styled(Link)`
-    min-height: 46px;
-    margin-top: 22px;
-    padding: 0 16px;
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: linear-gradient(135deg, #7c3aed, #2563eb);
-    color: white;
+const MiniStat = styled.div`
+    padding: 14px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: 18px;
+    background: rgba(21, 25, 43, 0.74);
+    display: grid;
+    gap: 4px;
+
+    strong {
+        font-size: 26px;
+        letter-spacing: -0.05em;
+    }
+
+    span {
+        color: ${({ theme }) => theme.colors.textMuted};
+        font-size: 13px;
+        font-weight: 800;
+    }
+`;
+
+const FeedMeta = styled.div`
+    padding: 0 4px;
+    color: ${({ theme }) => theme.colors.textMuted};
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 13px;
+    font-weight: 800;
+
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+`;
+
+const LoadingInline = styled.div`
+    color: ${({ theme }) => theme.colors.primaryHover};
     display: inline-flex;
     align-items: center;
-    gap: 9px;
-    font-weight: 900;
+    gap: 8px;
 
-    &:hover {
-        filter: brightness(1.08);
+    svg {
+        animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+        to {
+            transform: rotate(360deg);
+        }
     }
 `;
 
-const PrimaryButton = styled.button`
-    min-height: 46px;
-    margin-top: 22px;
-    padding: 0 16px;
-    border: none;
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: linear-gradient(135deg, #7c3aed, #2563eb);
-    color: white;
-    font-weight: 900;
-
-    &:hover {
-        filter: brightness(1.08);
-    }
+const PostsGrid = styled.div`
+    display: grid;
+    gap: 18px;
 `;
 
-const RequestsList = styled.div`
+const RequestsGrid = styled.div`
     display: grid;
     gap: 14px;
 `;
@@ -855,29 +1204,47 @@ const RequestCard = styled.article`
     }
 `;
 
-const RequestPreview = styled.div`
+const Preview = styled.div`
     position: relative;
-    min-height: 220px;
+    min-height: 230px;
     background: #05060d;
 
-    img {
+    img,
+    video {
         width: 100%;
         height: 100%;
-        min-height: 220px;
+        min-height: 230px;
         object-fit: cover;
+        display: block;
     }
 `;
 
+const MediaVideo = styled.video`
+    background: #05060d;
+`;
+
 const PreviewPlaceholder = styled.div`
-    min-height: 220px;
+    min-height: 230px;
+    padding: 24px;
     background:
             radial-gradient(circle at top left, rgba(124, 58, 237, 0.28), transparent 34%),
             radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.18), transparent 34%),
             #080a12;
     color: ${({ theme }) => theme.colors.primaryHover};
     display: grid;
-    place-items: center;
-    font-size: 44px;
+    place-content: center;
+    justify-items: center;
+    gap: 10px;
+    text-align: center;
+    font-weight: 900;
+
+    svg {
+        font-size: 44px;
+    }
+
+    span {
+        color: ${({ theme }) => theme.colors.textMuted};
+    }
 `;
 
 const StatusBadge = styled.div<{ $status: RequestStatus }>`
@@ -889,11 +1256,11 @@ const StatusBadge = styled.div<{ $status: RequestStatus }>`
     border-radius: ${({ theme }) => theme.radius.full};
     background: ${({ $status }) => {
         if ($status === 'APPROVED') {
-            return 'rgba(34, 197, 94, 0.88)';
+            return 'rgba(34, 197, 94, 0.86)';
         }
 
         if ($status === 'REJECTED') {
-            return 'rgba(239, 68, 68, 0.88)';
+            return 'rgba(239, 68, 68, 0.86)';
         }
 
         return 'rgba(245, 158, 11, 0.9)';
@@ -913,7 +1280,7 @@ const RequestBody = styled.div`
     gap: 14px;
 `;
 
-const RequestTop = styled.div`
+const RequestHeader = styled.div`
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
@@ -924,30 +1291,19 @@ const RequestTop = styled.div`
     }
 `;
 
-const RequestTitle = styled.h3`
+const RequestTitle = styled.h2`
     margin: 0;
-    font-size: 24px;
+    font-size: 25px;
     letter-spacing: -0.055em;
 `;
 
-const RequestMeta = styled.div`
-    margin-top: 5px;
-    color: ${({ theme }) => theme.colors.textMuted};
-    font-size: 13px;
-    font-weight: 700;
-`;
-
-const VisibilityBadge = styled.div<{ $visibility: PostVisibility }>`
+const MediaBadge = styled.div`
     flex: 0 0 auto;
     min-height: 36px;
     padding: 0 12px;
     border-radius: ${({ theme }) => theme.radius.full};
-    background: ${({ $visibility }) =>
-            $visibility === 'PREMIUM'
-                    ? 'rgba(236, 72, 153, 0.14)'
-                    : 'rgba(37, 99, 235, 0.14)'};
-    color: ${({ $visibility }) =>
-            $visibility === 'PREMIUM' ? '#f9a8d4' : '#bfdbfe'};
+    background: rgba(124, 58, 237, 0.14);
+    color: #ddd6fe;
     display: inline-flex;
     align-items: center;
     gap: 7px;
@@ -955,20 +1311,21 @@ const VisibilityBadge = styled.div<{ $visibility: PostVisibility }>`
     font-weight: 900;
 `;
 
-const Description = styled.p`
+const RequestDescription = styled.p`
     margin: 0;
     color: ${({ theme }) => theme.colors.textMuted};
     line-height: 1.6;
+    white-space: pre-wrap;
 `;
 
-const InfoGrid = styled.div`
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
+const MutedDescription = styled(RequestDescription)`
+    opacity: 0.68;
+    font-style: italic;
+`;
 
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        grid-template-columns: 1fr;
-    }
+const InfoList = styled.div`
+    display: grid;
+    gap: 8px;
 `;
 
 const InfoItem = styled.div`
@@ -976,66 +1333,129 @@ const InfoItem = styled.div`
     border: 1px solid ${({ theme }) => theme.colors.border};
     border-radius: 14px;
     background: rgba(255, 255, 255, 0.035);
-    display: grid;
-    gap: 4px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
 
     strong {
         color: ${({ theme }) => theme.colors.text};
-        font-size: 12px;
+        font-size: 13px;
     }
 
     span {
+        min-width: 0;
         color: ${({ theme }) => theme.colors.textMuted};
         font-size: 13px;
-        line-height: 1.35;
+        text-align: right;
         word-break: break-word;
+    }
+
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        flex-direction: column;
+        gap: 4px;
+
+        span {
+            text-align: left;
+        }
     }
 `;
 
-const RequestActions = styled.div`
-    display: flex;
-    flex-wrap: wrap;
-    gap: 9px;
+const LoadMoreAnchor = styled.div`
+    min-height: 80px;
+    display: grid;
+    place-items: center;
 `;
 
-const OpenPostLink = styled(Link)`
-    min-height: 42px;
-    padding: 0 14px;
+const LoadingMore = styled.div`
+    padding: 12px 16px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: rgba(255, 255, 255, 0.045);
+    color: ${({ theme }) => theme.colors.textMuted};
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 13px;
+    font-weight: 900;
+
+    svg {
+        color: ${({ theme }) => theme.colors.primaryHover};
+        animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+        to {
+            transform: rotate(360deg);
+        }
+    }
+`;
+
+const EndMessage = styled.div`
+    color: ${({ theme }) => theme.colors.textMuted};
+    font-size: 13px;
+    font-weight: 800;
+`;
+
+const EmptyCard = styled.section`
+    min-height: 380px;
+    padding: 30px 22px;
+    border: 1px dashed rgba(139, 92, 246, 0.34);
+    border-radius: ${({ theme }) => theme.radius.lg};
+    background:
+            radial-gradient(circle at top left, rgba(124, 58, 237, 0.18), transparent 34%),
+            rgba(21, 25, 43, 0.74);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+
+    > svg {
+        margin-bottom: 16px;
+        color: ${({ theme }) => theme.colors.primaryHover};
+        font-size: 44px;
+    }
+
+    h2 {
+        margin: 0 0 10px;
+        font-size: clamp(26px, 4vw, 40px);
+        letter-spacing: -0.06em;
+    }
+
+    p {
+        max-width: 520px;
+        margin: 0;
+        color: ${({ theme }) => theme.colors.textMuted};
+        line-height: 1.6;
+    }
+`;
+
+const StateCard = styled(EmptyCard)`
+    min-height: 420px;
+
+    > svg {
+        animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+        to {
+            transform: rotate(360deg);
+        }
+    }
+`;
+
+const PrimaryButton = styled.button`
+    min-height: 46px;
+    margin-top: 22px;
+    padding: 0 16px;
+    border: none;
     border-radius: ${({ theme }) => theme.radius.full};
     background: linear-gradient(135deg, #7c3aed, #2563eb);
     color: white;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
     font-weight: 900;
 
     &:hover {
         filter: brightness(1.08);
     }
-`;
-
-const PendingNote = styled.div`
-    min-height: 42px;
-    padding: 0 14px;
-    border: 1px solid rgba(245, 158, 11, 0.32);
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(245, 158, 11, 0.1);
-    color: #fde68a;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    font-weight: 900;
-`;
-
-const RejectedNote = styled.div`
-    min-height: 42px;
-    padding: 0 14px;
-    border: 1px solid rgba(239, 68, 68, 0.32);
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(239, 68, 68, 0.1);
-    color: #fecaca;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    font-weight: 900;
 `;

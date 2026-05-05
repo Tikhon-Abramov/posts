@@ -1,244 +1,364 @@
-import { MouseEvent, useEffect, useMemo, useState } from 'react';
-import { NavLink } from 'react-router-dom';
+import type { ReactNode } from 'react';
+import { NavLink, Link } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import styled from 'styled-components';
 import {
     FiBell,
     FiBookmark,
-    FiFileText,
+    FiCreditCard,
+    FiFilePlus,
+    FiGrid,
     FiHome,
+    FiInbox,
+    FiLogOut,
     FiPlusCircle,
-    FiSettings,
     FiShield,
     FiStar,
     FiUser,
 } from 'react-icons/fi';
 
 import type { AppDispatch, RootState } from '../../app/store';
-import { openAuthModal } from '../../entities/auth/slice/authSlice';
-import {
-    getMockNotifications,
-    MOCK_STORAGE_KEYS,
-    type MockNotification,
-} from '../../shared/lib/mockStorage';
+import { logout, openAuthModal } from '../../entities/auth/slice/authSlice';
+import { useGetNotificationsStatsQuery } from '../../entities/notification/api/notificationApi';
+import { getMediaUrl } from '../../shared/lib/getMediaUrl';
+
+interface NavigationItem {
+    to: string;
+    label: string;
+    icon: ReactNode;
+    end?: boolean;
+    badge?: number;
+    isAdminOnly?: boolean;
+}
 
 export function Sidebar() {
     const dispatch = useDispatch<AppDispatch>();
 
     const { accessToken, user } = useSelector((state: RootState) => state.auth);
 
-    const [notifications, setNotifications] = useState<MockNotification[]>([]);
-
     const isAuth = Boolean(accessToken);
     const isAdmin = user?.role === 'ADMIN';
+    const avatarUrl = getMediaUrl(user?.avatarUrl);
 
-    const unreadNotificationsCount = useMemo(() => {
-        if (!user) {
-            return 0;
+    const { data: notificationsStats } = useGetNotificationsStatsQuery(undefined, {
+        skip: !isAuth,
+    });
+
+    const unreadNotificationsCount = notificationsStats?.unread || 0;
+
+    const navigationItems: NavigationItem[] = [
+        {
+            to: '/',
+            label: 'Лента',
+            icon: <FiHome />,
+            end: true,
+        },
+        {
+            to: '/premium',
+            label: 'Premium',
+            icon: <FiStar />,
+        },
+        {
+            to: '/saved',
+            label: 'Сохраненные',
+            icon: <FiBookmark />,
+        },
+        {
+            to: '/my-posts',
+            label: 'Мои публикации',
+            icon: <FiGrid />,
+        },
+        {
+            to: '/content-request',
+            label: 'Предложить пост',
+            icon: <FiFilePlus />,
+        },
+        {
+            to: '/notifications',
+            label: 'Уведомления',
+            icon: <FiBell />,
+            badge: unreadNotificationsCount,
+        },
+        {
+            to: '/subscription',
+            label: 'Подписка',
+            icon: <FiCreditCard />,
+        },
+        {
+            to: '/profile',
+            label: 'Профиль',
+            icon: <FiUser />,
+        },
+        {
+            to: '/admin/requests',
+            label: 'Заявки',
+            icon: <FiInbox />,
+            isAdminOnly: true,
+        },
+        {
+            to: '/admin/posts',
+            label: 'Посты',
+            icon: <FiShield />,
+            isAdminOnly: true,
+        },
+        {
+            to: '/admin/posts/create',
+            label: 'Создать пост',
+            icon: <FiPlusCircle />,
+            isAdminOnly: true,
+        },
+    ];
+
+    const visibleNavigationItems = navigationItems.filter((item) => {
+        if (item.isAdminOnly) {
+            return isAdmin;
         }
 
-        return notifications.filter(
-            (notification) => notification.userId === user.id && !notification.isRead
-        ).length;
-    }, [notifications, user]);
+        return true;
+    });
 
-    useEffect(() => {
-        const loadNotifications = () => {
-            setNotifications(getMockNotifications());
-        };
-
-        loadNotifications();
-
-        const intervalId = window.setInterval(loadNotifications, 1200);
-
-        const handleStorageChange = (event: StorageEvent) => {
-            if (event.key === MOCK_STORAGE_KEYS.notifications) {
-                loadNotifications();
-            }
-        };
-
-        window.addEventListener('storage', handleStorageChange);
-
-        return () => {
-            window.clearInterval(intervalId);
-            window.removeEventListener('storage', handleStorageChange);
-        };
-    }, []);
-
-    const handleProtectedClick = (
-        event: MouseEvent<HTMLAnchorElement>,
-        reason: string
-    ) => {
-        if (isAuth) {
-            return;
-        }
-
-        event.preventDefault();
-
+    const handleOpenAuth = () => {
         dispatch(
             openAuthModal({
                 mode: 'login',
-                reason,
+                reason: 'Войдите в аккаунт, чтобы использовать все возможности сервиса.',
             })
         );
     };
 
+    const handleLogout = () => {
+        dispatch(logout());
+    };
+
     return (
         <Aside>
-            <ProfileCard>
-                <ProfileAvatar>
-                    {user?.avatarUrl ? (
-                        <img src={user.avatarUrl} alt={user.nickname} />
-                    ) : (
-                        <FiUser />
-                    )}
-                </ProfileAvatar>
+            <LogoLink to="/">
+                <LogoMark>PF</LogoMark>
 
-                <ProfileText>
-                    <strong>{user?.nickname || 'Гость'}</strong>
-                    <span>
-            {user
-                ? user.hasPremium
-                    ? 'Premium аккаунт'
-                    : 'Обычный аккаунт'
-                : 'Войдите в аккаунт'}
-          </span>
-                </ProfileText>
-            </ProfileCard>
+                <LogoText>
+                    <strong>PulseFeed</strong>
+                    <span>media platform</span>
+                </LogoText>
+            </LogoLink>
 
-            <NavGroup>
-                <GroupTitle>Лента</GroupTitle>
+            <Navigation>
+                {visibleNavigationItems.map((item) => (
+                    <NavigationLink key={item.to} to={item.to} end={item.end}>
+                        <IconBox>{item.icon}</IconBox>
 
-                <NavItem to="/">
-                    <FiHome />
-                    Обычная лента
-                </NavItem>
+                        <span>{item.label}</span>
 
-                <NavItem to="/premium">
-                    <FiStar />
-                    Премиум лента
-                </NavItem>
-            </NavGroup>
+                        {Boolean(item.badge) && (
+                            <Badge>{item.badge && item.badge > 99 ? '99+' : item.badge}</Badge>
+                        )}
+                    </NavigationLink>
+                ))}
+            </Navigation>
 
-            <NavGroup>
-                <GroupTitle>Мой аккаунт</GroupTitle>
+            <BottomBlock>
+                {isAuth && user ? (
+                    <UserCard>
+                        <AvatarLink to="/profile">
+                            {avatarUrl ? (
+                                <img src={avatarUrl} alt={user.nickname} />
+                            ) : (
+                                <FiUser />
+                            )}
+                        </AvatarLink>
 
-                <NavItem
-                    to="/my-posts"
-                    onClick={(event) =>
-                        handleProtectedClick(
-                            event,
-                            'Чтобы смотреть свои публикации, нужно войти в аккаунт.'
-                        )
-                    }
-                >
-                    <FiFileText />
-                    Мои публикации
-                </NavItem>
+                        <UserInfo>
+                            <strong>@{user.nickname}</strong>
 
-                <NavItem
-                    to="/notifications"
-                    onClick={(event) =>
-                        handleProtectedClick(
-                            event,
-                            'Чтобы смотреть уведомления, нужно войти в аккаунт.'
-                        )
-                    }
-                >
-                    <FiBell />
-                    <NavItemText>Уведомления</NavItemText>
+                            <span>
+                {user.role === 'ADMIN'
+                    ? 'Администратор'
+                    : user.hasPremium
+                        ? 'Premium'
+                        : 'Пользователь'}
+              </span>
+                        </UserInfo>
 
-                    {unreadNotificationsCount > 0 && (
-                        <UnreadBadge>
-                            {unreadNotificationsCount > 99 ? '99+' : unreadNotificationsCount}
-                        </UnreadBadge>
-                    )}
-                </NavItem>
+                        <LogoutButton type="button" onClick={handleLogout}>
+                            <FiLogOut />
+                        </LogoutButton>
+                    </UserCard>
+                ) : (
+                    <AuthCard>
+                        <AuthTitle>Войдите в аккаунт</AuthTitle>
 
-                <NavItem
-                    to="/saved"
-                    onClick={(event) =>
-                        handleProtectedClick(
-                            event,
-                            'Чтобы смотреть сохраненные посты, нужно войти в аккаунт.'
-                        )
-                    }
-                >
-                    <FiBookmark />
-                    Сохраненные
-                </NavItem>
+                        <AuthText>
+                            Лайки, сохранения, заявки, уведомления и Premium доступны после
+                            авторизации.
+                        </AuthText>
 
-                <NavItem
-                    to="/submit-content"
-                    onClick={(event) =>
-                        handleProtectedClick(
-                            event,
-                            'Чтобы предложить публикацию админу, нужно войти в аккаунт.'
-                        )
-                    }
-                >
-                    <FiPlusCircle />
-                    Предложить пост
-                </NavItem>
-
-                <NavItem
-                    to="/profile"
-                    onClick={(event) =>
-                        handleProtectedClick(
-                            event,
-                            'Чтобы открыть профиль, нужно войти в аккаунт.'
-                        )
-                    }
-                >
-                    <FiSettings />
-                    Профиль
-                </NavItem>
-            </NavGroup>
-
-            {isAdmin && (
-                <AdminBlock>
-                    <GroupTitle>Админ</GroupTitle>
-
-                    <AdminNavItem to="/admin">
-                        <FiShield />
-                        Админ-панель
-                    </AdminNavItem>
-                </AdminBlock>
-            )}
+                        <AuthButton type="button" onClick={handleOpenAuth}>
+                            Войти
+                        </AuthButton>
+                    </AuthCard>
+                )}
+            </BottomBlock>
         </Aside>
     );
 }
 
 const Aside = styled.aside`
     position: sticky;
-    top: 88px;
-    height: calc(100vh - 110px);
-    padding: 12px;
+    top: 16px;
+    height: calc(100vh - 32px);
+    min-width: 280px;
+    max-width: 280px;
+    padding: 16px;
     border: 1px solid ${({ theme }) => theme.colors.border};
     border-radius: ${({ theme }) => theme.radius.lg};
-    background: rgba(16, 19, 34, 0.72);
+    background:
+            radial-gradient(circle at top left, rgba(124, 58, 237, 0.16), transparent 34%),
+            rgba(15, 18, 32, 0.88);
+    backdrop-filter: blur(18px);
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 16px;
 
-    @media (max-width: ${({ theme }) => theme.breakpoints.tablet}) {
+    @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
         display: none;
     }
 `;
 
-const ProfileCard = styled.div`
-    padding: 13px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
+const LogoLink = styled(Link)`
+    padding: 8px;
     border-radius: 20px;
-    background:
-            radial-gradient(circle at top left, rgba(124, 58, 237, 0.18), transparent 36%),
-            rgba(255, 255, 255, 0.035);
+    color: ${({ theme }) => theme.colors.text};
     display: flex;
     align-items: center;
-    gap: 11px;
+    gap: 12px;
+
+    &:hover {
+        background: rgba(255, 255, 255, 0.045);
+    }
 `;
 
-const ProfileAvatar = styled.div`
+const LogoMark = styled.div`
+    flex: 0 0 auto;
+    width: 48px;
+    height: 48px;
+    border-radius: 18px;
+    background: linear-gradient(135deg, #7c3aed, #2563eb);
+    color: white;
+    display: grid;
+    place-items: center;
+    font-size: 16px;
+    font-weight: 950;
+    letter-spacing: -0.04em;
+    box-shadow: 0 18px 38px rgba(124, 58, 237, 0.24);
+`;
+
+const LogoText = styled.div`
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+
+    strong {
+        font-size: 18px;
+        letter-spacing: -0.05em;
+    }
+
+    span {
+        color: ${({ theme }) => theme.colors.textMuted};
+        font-size: 12px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+    }
+`;
+
+const Navigation = styled.nav`
+    min-height: 0;
+    padding: 6px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: 24px;
+    background: rgba(255, 255, 255, 0.035);
+    display: grid;
+    gap: 4px;
+    overflow-y: auto;
+`;
+
+const NavigationLink = styled(NavLink)`
+    min-height: 46px;
+    padding: 0 10px;
+    border-radius: 18px;
+    color: ${({ theme }) => theme.colors.textMuted};
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 900;
+    position: relative;
+
+    &.active {
+        background: linear-gradient(
+                135deg,
+                rgba(124, 58, 237, 0.82),
+                rgba(37, 99, 235, 0.72)
+        );
+        color: white;
+        box-shadow: 0 14px 34px rgba(37, 99, 235, 0.18);
+    }
+
+    &:hover:not(.active) {
+        background: rgba(255, 255, 255, 0.06);
+        color: ${({ theme }) => theme.colors.text};
+    }
+`;
+
+const IconBox = styled.span`
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.055);
+    display: grid;
+    place-items: center;
+    font-size: 16px;
+
+    ${NavigationLink}.active & {
+        background: rgba(255, 255, 255, 0.16);
+    }
+`;
+
+const Badge = styled.span`
+    min-width: 22px;
+    height: 22px;
+    margin-left: auto;
+    padding: 0 7px;
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: #ef4444;
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 950;
+    line-height: 1;
+`;
+
+const BottomBlock = styled.div`
+    margin-top: auto;
+    display: grid;
+    gap: 10px;
+`;
+
+const UserCard = styled.div`
+    padding: 10px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: 22px;
+    background:
+            radial-gradient(circle at top left, rgba(124, 58, 237, 0.16), transparent 36%),
+            rgba(255, 255, 255, 0.045);
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+`;
+
+const AvatarLink = styled(Link)`
     flex: 0 0 auto;
     width: 46px;
     height: 46px;
@@ -257,7 +377,7 @@ const ProfileAvatar = styled.div`
     }
 `;
 
-const ProfileText = styled.div`
+const UserInfo = styled.div`
     min-width: 0;
     display: grid;
     gap: 3px;
@@ -265,103 +385,68 @@ const ProfileText = styled.div`
     strong {
         overflow: hidden;
         color: ${({ theme }) => theme.colors.text};
-        font-size: 15px;
         text-overflow: ellipsis;
         white-space: nowrap;
+        font-size: 14px;
     }
 
     span {
-        overflow: hidden;
         color: ${({ theme }) => theme.colors.textMuted};
         font-size: 12px;
         font-weight: 800;
-        text-overflow: ellipsis;
-        white-space: nowrap;
     }
 `;
 
-const NavGroup = styled.nav`
+const LogoutButton = styled.button`
+    flex: 0 0 auto;
+    width: 38px;
+    height: 38px;
+    border: 1px solid rgba(239, 68, 68, 0.28);
+    border-radius: 15px;
+    background: rgba(239, 68, 68, 0.1);
+    color: #fecaca;
     display: grid;
-    gap: 6px;
-`;
-
-const GroupTitle = styled.div`
-    padding: 0 8px;
-    color: ${({ theme }) => theme.colors.textMuted};
-    font-size: 11px;
-    font-weight: 900;
-    text-transform: uppercase;
-    letter-spacing: 0.09em;
-`;
-
-const NavItem = styled(NavLink)`
-    min-height: 46px;
-    padding: 0 13px;
-    border-radius: 16px;
-    color: ${({ theme }) => theme.colors.textMuted};
-    display: flex;
-    align-items: center;
-    gap: 11px;
-    font-weight: 800;
-
-    svg {
-        flex: 0 0 auto;
-        font-size: 20px;
-    }
-
-    &.active {
-        color: white;
-        background: linear-gradient(
-                135deg,
-                rgba(124, 58, 237, 0.88),
-                rgba(37, 99, 235, 0.76)
-        );
-    }
+    place-items: center;
+    font-size: 18px;
 
     &:hover {
-        color: white;
-        background: ${({ theme }) => theme.colors.bgCard};
+        background: rgba(239, 68, 68, 0.16);
     }
 `;
 
-const NavItemText = styled.span`
-    min-width: 0;
-    flex: 1;
-`;
-
-const UnreadBadge = styled.span`
-    flex: 0 0 auto;
-    min-width: 24px;
-    height: 24px;
-    padding: 0 7px;
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: linear-gradient(135deg, #ef4444, #ec4899);
-    color: white;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 11px;
-    font-weight: 900;
-    box-shadow: 0 8px 22px rgba(239, 68, 68, 0.28);
-`;
-
-const AdminBlock = styled.div`
-    margin-top: auto;
+const AuthCard = styled.div`
+    padding: 14px;
+    border: 1px solid rgba(139, 92, 246, 0.28);
+    border-radius: 22px;
+    background:
+            radial-gradient(circle at top left, rgba(124, 58, 237, 0.18), transparent 38%),
+            rgba(255, 255, 255, 0.045);
     display: grid;
-    gap: 6px;
+    gap: 10px;
 `;
 
-const AdminNavItem = styled(NavItem)`
-    color: #c4b5fd;
-    background: rgba(124, 58, 237, 0.1);
-    border: 1px solid rgba(124, 58, 237, 0.18);
+const AuthTitle = styled.strong`
+    color: ${({ theme }) => theme.colors.text};
+    font-size: 16px;
+    letter-spacing: -0.04em;
+`;
 
-    &.active {
-        color: white;
-        background: linear-gradient(
-                135deg,
-                rgba(124, 58, 237, 0.95),
-                rgba(239, 68, 68, 0.72)
-        );
+const AuthText = styled.p`
+    margin: 0;
+    color: ${({ theme }) => theme.colors.textMuted};
+    font-size: 13px;
+    line-height: 1.45;
+`;
+
+const AuthButton = styled.button`
+    min-height: 42px;
+    border: none;
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: linear-gradient(135deg, #7c3aed, #2563eb);
+    color: white;
+    font-weight: 900;
+
+    &:hover {
+        filter: brightness(1.08);
     }
 `;

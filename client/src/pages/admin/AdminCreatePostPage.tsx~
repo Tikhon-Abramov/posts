@@ -1,18 +1,18 @@
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useMemo, useRef, useState } from 'react';
+import type {ChangeEvent, FormEvent} from 'react';
 import { useSelector } from 'react-redux';
 import styled from 'styled-components';
 import {
   FiAlertCircle,
-  FiArrowLeft,
   FiCheckCircle,
-  FiFileText,
+  FiFile,
   FiGlobe,
   FiImage,
-  FiInfo,
   FiPlusCircle,
-  FiSave,
+  FiRefreshCw,
+  FiSend,
   FiStar,
+  FiTrash2,
   FiUploadCloud,
   FiVideo,
 } from 'react-icons/fi';
@@ -20,171 +20,182 @@ import {
 import type { RootState } from '../../app/store';
 import type {
   MediaType,
-  Post,
   PostVisibility,
 } from '../../entities/post/model/postTypes';
+import { useCreateAdminPostMutation } from '../../entities/admin/api/adminPostApi';
 
-const MOCK_POSTS_KEY = 'pulsefeed_mock_posts';
+type FormStatus = 'idle' | 'success' | 'error';
 
-const MAX_IMAGE_STORAGE_SIZE = 1200 * 1024;
+interface SelectedFileState {
+  file: File;
+  mediaType: MediaType;
+  previewUrl: string | null;
+}
 
 export function AdminCreatePostPage() {
   const user = useSelector((state: RootState) => state.auth.user);
 
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const [createAdminPost, { isLoading: isSubmitting }] =
+      useCreateAdminPostMutation();
+
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [visibility, setVisibility] = useState<PostVisibility>('PUBLIC');
-  const [mediaType, setMediaType] = useState<MediaType>('IMAGE');
-  const [file, setFile] = useState<File | null>(null);
-  const [localPreviewUrl, setLocalPreviewUrl] = useState<string | null>(null);
-  const [savedImageUrl, setSavedImageUrl] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [successPostId, setSuccessPostId] = useState<number | null>(null);
+  const [selectedFile, setSelectedFile] = useState<SelectedFileState | null>(
+      null
+  );
+  const [status, setStatus] = useState<FormStatus>('idle');
+  const [message, setMessage] = useState('');
 
-  const fileInputAccept = mediaType === 'IMAGE' ? 'image/*' : 'video/*';
+  const canSubmit = useMemo(() => {
+    return (
+        user?.role === 'ADMIN' &&
+        title.trim().length >= 3 &&
+        Boolean(selectedFile) &&
+        !isSubmitting
+    );
+  }, [isSubmitting, selectedFile, title, user]);
 
-  const isSubmitDisabled = useMemo(() => {
-    return !title.trim() || !description.trim() || !file || !user;
-  }, [description, file, title, user]);
+  const handlePickFile = () => {
+    fileInputRef.current?.click();
+  };
 
-  useEffect(() => {
-    return () => {
-      if (localPreviewUrl) {
-        URL.revokeObjectURL(localPreviewUrl);
-      }
-    };
-  }, [localPreviewUrl]);
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
 
-  const resetPreview = () => {
-    if (localPreviewUrl) {
-      URL.revokeObjectURL(localPreviewUrl);
+    setStatus('idle');
+    setMessage('');
+
+    if (!file) {
+      return;
     }
 
-    setLocalPreviewUrl(null);
-    setSavedImageUrl(null);
+    const isImage = file.type.startsWith('image/');
+    const isVideo = file.type.startsWith('video/');
+
+    if (!isImage && !isVideo) {
+      setSelectedFile(null);
+      setStatus('error');
+      setMessage('Можно выбрать только фото или видео.');
+      return;
+    }
+
+    const maxSizeMb = isImage ? 8 : 40;
+    const maxSizeBytes = maxSizeMb * 1024 * 1024;
+
+    if (file.size > maxSizeBytes) {
+      setSelectedFile(null);
+      setStatus('error');
+      setMessage(
+          isImage
+              ? 'Изображение не должно быть больше 8 MB.'
+              : 'Видео не должно быть больше 40 MB.'
+      );
+      return;
+    }
+
+    const mediaType: MediaType = isImage ? 'IMAGE' : 'VIDEO';
+
+    if (isImage) {
+      const reader = new FileReader();
+
+      reader.onload = () => {
+        setSelectedFile({
+          file,
+          mediaType,
+          previewUrl:
+              typeof reader.result === 'string' ? reader.result : null,
+        });
+      };
+
+      reader.onerror = () => {
+        setSelectedFile(null);
+        setStatus('error');
+        setMessage('Не удалось прочитать изображение.');
+      };
+
+      reader.readAsDataURL(file);
+      return;
+    }
+
+    setSelectedFile({
+      file,
+      mediaType,
+      previewUrl: null,
+    });
+  };
+
+  const handleRemoveFile = () => {
+    setSelectedFile(null);
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
   };
 
   const resetForm = () => {
     setTitle('');
     setDescription('');
     setVisibility('PUBLIC');
-    setMediaType('IMAGE');
-    setFile(null);
-    resetPreview();
-  };
+    setSelectedFile(null);
 
-  const handleMediaTypeChange = (nextMediaType: MediaType) => {
-    setMediaType(nextMediaType);
-    setFile(null);
-    setError(null);
-    setSuccessPostId(null);
-    resetPreview();
-  };
-
-  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = event.target.files?.[0] || null;
-
-    setError(null);
-    setSuccessPostId(null);
-    resetPreview();
-
-    if (!selectedFile) {
-      setFile(null);
-      return;
-    }
-
-    const isImage = selectedFile.type.startsWith('image/');
-    const isVideo = selectedFile.type.startsWith('video/');
-
-    if (mediaType === 'IMAGE' && !isImage) {
-      setError('Выберите файл изображения.');
-      event.target.value = '';
-      return;
-    }
-
-    if (mediaType === 'VIDEO' && !isVideo) {
-      setError('Выберите видеофайл.');
-      event.target.value = '';
-      return;
-    }
-
-    setFile(selectedFile);
-    setLocalPreviewUrl(URL.createObjectURL(selectedFile));
-
-    if (isImage && selectedFile.size <= MAX_IMAGE_STORAGE_SIZE) {
-      const reader = new FileReader();
-
-      reader.onload = () => {
-        setSavedImageUrl(String(reader.result));
-      };
-
-      reader.readAsDataURL(selectedFile);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
     }
   };
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    setError(null);
-    setSuccessPostId(null);
+    setStatus('idle');
+    setMessage('');
 
     if (!user) {
-      setError('Админ не найден. Войдите в админский аккаунт заново.');
+      setStatus('error');
+      setMessage('Чтобы создать пост, нужно войти в админский аккаунт.');
       return;
     }
 
-    if (!title.trim()) {
-      setError('Введите название поста.');
+    if (user.role !== 'ADMIN') {
+      setStatus('error');
+      setMessage('Создавать посты может только администратор.');
       return;
     }
 
-    if (!description.trim()) {
-      setError('Добавьте описание поста.');
+    if (title.trim().length < 3) {
+      setStatus('error');
+      setMessage('Название должно содержать минимум 3 символа.');
       return;
     }
 
-    if (!file) {
-      setError('Прикрепите фото или видео.');
+    if (!selectedFile) {
+      setStatus('error');
+      setMessage('Выберите фото или видео для публикации.');
       return;
     }
 
-    const postId = Date.now();
+    try {
+      await createAdminPost({
+        title: title.trim(),
+        description: description.trim() || '',
+        visibility,
+        file: selectedFile.file,
+      }).unwrap();
 
-    const newPost: Post = {
-      id: postId,
-      title: title.trim(),
-      description: description.trim(),
-      visibility,
-      media: [
-        {
-          id: postId,
-          type: mediaType,
-          url:
-              mediaType === 'IMAGE'
-                  ? savedImageUrl || createMockImageUrl(title.trim())
-                  : 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
-        },
-      ],
-      author: {
-        id: user.id,
-        nickname: user.nickname,
-        avatarUrl: user.avatarUrl,
-      },
-      likesCount: 0,
-      dislikesCount: 0,
-      commentsCount: 0,
-      isLikedByMe: false,
-      isDislikedByMe: false,
-      isSavedByMe: false,
-      createdAt: new Date().toISOString(),
-    };
+      setStatus('success');
+      setMessage(
+          visibility === 'PREMIUM'
+              ? 'Premium-пост опубликован.'
+              : 'Публичный пост опубликован.'
+      );
 
-    const currentPosts = getSavedPosts();
-
-    localStorage.setItem(MOCK_POSTS_KEY, JSON.stringify([newPost, ...currentPosts]));
-
-    resetForm();
-    setSuccessPostId(postId);
+      resetForm();
+    } catch {
+      setStatus('error');
+      setMessage('Не удалось создать пост. Попробуйте еще раз.');
+    }
   };
 
   return (
@@ -196,282 +207,181 @@ export function AdminCreatePostPage() {
             <Title>Создать пост</Title>
 
             <Subtitle>
-              Ручная публикация фото или видео от имени администратора. Пост можно
-              отправить в обычную ленту или в Premium.
+              Администратор может напрямую опубликовать фото или видео в обычную
+              ленту либо в Premium. Создание теперь идет через admin API-слой,
+              который позже подключим к backend.
             </Subtitle>
           </HeroContent>
 
-          <BackLink to="/admin/posts">
-            <FiArrowLeft />
-            К постам
-          </BackLink>
+          <HeroIcon>
+            <FiPlusCircle />
+          </HeroIcon>
         </Hero>
 
-        <Grid>
+        <ContentGrid>
           <FormCard onSubmit={handleSubmit}>
-            <SectionHeader>
-              <div>
-                <Eyebrow>Новая публикация</Eyebrow>
-                <h2>Данные поста</h2>
-              </div>
-
-              <HeaderIcon>
-                <FiPlusCircle />
-              </HeaderIcon>
-            </SectionHeader>
-
-            {successPostId && (
-                <SuccessBox>
-                  <FiCheckCircle />
-                  <span>
-                Пост создан и сохранен в mock-ленту. ID поста: {successPostId}.
-              </span>
-                </SuccessBox>
-            )}
-
-            {error && (
-                <ErrorBox>
-                  <FiAlertCircle />
-                  <span>{error}</span>
-                </ErrorBox>
-            )}
-
-            <Field>
+            <FieldGroup>
               <Label htmlFor="post-title">Название</Label>
 
               <Input
                   id="post-title"
-                  type="text"
-                  placeholder="Например, Закрытый backstage"
                   value={title}
                   maxLength={90}
-                  onChange={(event) => {
-                    setTitle(event.target.value);
-                    setSuccessPostId(null);
-                  }}
+                  placeholder="Например: Закрытый неоновый сет"
+                  onChange={(event) => setTitle(event.target.value)}
               />
 
-              <Counter>{title.length}/90</Counter>
-            </Field>
+              <Hint>{title.trim().length}/90 символов</Hint>
+            </FieldGroup>
 
-            <Field>
+            <FieldGroup>
               <Label htmlFor="post-description">Описание</Label>
 
               <Textarea
                   id="post-description"
-                  placeholder="Добавьте текст публикации"
                   value={description}
-                  maxLength={800}
-                  onChange={(event) => {
-                    setDescription(event.target.value);
-                    setSuccessPostId(null);
-                  }}
+                  maxLength={1200}
+                  placeholder="Описание можно оставить пустым..."
+                  onChange={(event) => setDescription(event.target.value)}
               />
 
-              <Counter>{description.length}/800</Counter>
-            </Field>
+              <Hint>{description.trim().length}/1200 символов</Hint>
+            </FieldGroup>
 
-            <OptionsGrid>
-              <Field>
-                <Label>Тип публикации</Label>
+            <FieldGroup>
+              <Label>Лента</Label>
 
-                <Segmented>
-                  <SegmentButton
-                      type="button"
-                      $active={visibility === 'PUBLIC'}
-                      onClick={() => setVisibility('PUBLIC')}
-                  >
-                    <FiGlobe />
-                    Обычная
-                  </SegmentButton>
-
-                  <SegmentButton
-                      type="button"
-                      $active={visibility === 'PREMIUM'}
-                      onClick={() => setVisibility('PREMIUM')}
-                  >
-                    <FiStar />
-                    Premium
-                  </SegmentButton>
-                </Segmented>
-              </Field>
-
-              <Field>
-                <Label>Тип файла</Label>
-
-                <Segmented>
-                  <SegmentButton
-                      type="button"
-                      $active={mediaType === 'IMAGE'}
-                      onClick={() => handleMediaTypeChange('IMAGE')}
-                  >
-                    <FiImage />
-                    Фото
-                  </SegmentButton>
-
-                  <SegmentButton
-                      type="button"
-                      $active={mediaType === 'VIDEO'}
-                      onClick={() => handleMediaTypeChange('VIDEO')}
-                  >
-                    <FiVideo />
-                    Видео
-                  </SegmentButton>
-                </Segmented>
-              </Field>
-            </OptionsGrid>
-
-            <Field>
-              <Label htmlFor="post-file">Медиафайл</Label>
-
-              <UploadBox htmlFor="post-file">
-                <UploadIcon>
-                  <FiUploadCloud />
-                </UploadIcon>
-
-                <UploadText>
-                  <strong>
-                    {file ? file.name : 'Выберите фото или видео для публикации'}
-                  </strong>
+              <VisibilityGrid>
+                <VisibilityButton
+                    type="button"
+                    $active={visibility === 'PUBLIC'}
+                    onClick={() => setVisibility('PUBLIC')}
+                >
+                  <FiGlobe />
 
                   <span>
-                  {mediaType === 'IMAGE'
-                      ? 'Для временного mock-режима лучше использовать изображение до 1.2 MB.'
-                      : 'В mock-режиме видео не сохраняется полностью, после создания будет использоваться тестовое видео.'}
+                  <strong>Обычная лента</strong>
+                  <small>Пост видят все пользователи</small>
                 </span>
-                </UploadText>
+                </VisibilityButton>
 
-                <input
-                    id="post-file"
-                    type="file"
-                    accept={fileInputAccept}
-                    onChange={handleFileChange}
-                />
-              </UploadBox>
-            </Field>
+                <VisibilityButton
+                    type="button"
+                    $active={visibility === 'PREMIUM'}
+                    onClick={() => setVisibility('PREMIUM')}
+                >
+                  <FiStar />
 
-            {file && (
-                <FileInfo>
-                  <strong>Файл:</strong>
-                  <span>{file.name}</span>
-                  <small>{formatFileSize(file.size)}</small>
-                </FileInfo>
-            )}
+                  <span>
+                  <strong>Premium</strong>
+                  <small>Пост видят только подписчики</small>
+                </span>
+                </VisibilityButton>
+              </VisibilityGrid>
+            </FieldGroup>
 
-            {localPreviewUrl && (
-                <PreviewCard>
-                  <PreviewHeader>
-                    <strong>Предпросмотр</strong>
+            <FieldGroup>
+              <Label>Медиафайл</Label>
+
+              <HiddenFileInput
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*,video/*"
+                  onChange={handleFileChange}
+              />
+
+              {!selectedFile ? (
+                  <UploadZone type="button" onClick={handlePickFile}>
+                    <FiUploadCloud />
+
+                    <strong>Выберите фото или видео</strong>
 
                     <span>
-                  {visibility === 'PREMIUM'
-                      ? 'Будет опубликовано в Premium'
-                      : 'Будет опубликовано в обычной ленте'}
+                  Фото до 8 MB или видео до 40 MB. В mock-режиме изображения
+                  сохраняются как preview, а видео временно заменяется тестовым
+                  роликом через API-слой.
                 </span>
-                  </PreviewHeader>
+                  </UploadZone>
+              ) : (
+                  <SelectedFile>
+                    <PreviewBox>
+                      {selectedFile.mediaType === 'IMAGE' ? (
+                          selectedFile.previewUrl ? (
+                              <img
+                                  src={selectedFile.previewUrl}
+                                  alt={selectedFile.file.name}
+                              />
+                          ) : (
+                              <PreviewPlaceholder>
+                                <FiImage />
+                              </PreviewPlaceholder>
+                          )
+                      ) : (
+                          <PreviewPlaceholder>
+                            <FiVideo />
+                          </PreviewPlaceholder>
+                      )}
+                    </PreviewBox>
 
-                  {mediaType === 'IMAGE' ? (
-                      <img src={localPreviewUrl} alt="Предпросмотр поста" />
-                  ) : (
-                      <video src={localPreviewUrl} controls />
-                  )}
-                </PreviewCard>
+                    <SelectedFileInfo>
+                      <FileTypeBadge>
+                        {selectedFile.mediaType === 'IMAGE' ? <FiImage /> : <FiVideo />}
+                        {selectedFile.mediaType === 'IMAGE' ? 'Фото' : 'Видео'}
+                      </FileTypeBadge>
+
+                      <strong>{selectedFile.file.name}</strong>
+
+                      <span>{formatFileSize(selectedFile.file.size)}</span>
+                    </SelectedFileInfo>
+
+                    <RemoveFileButton type="button" onClick={handleRemoveFile}>
+                      <FiTrash2 />
+                      Удалить
+                    </RemoveFileButton>
+                  </SelectedFile>
+              )}
+            </FieldGroup>
+
+            {message && (
+                <StatusMessage $status={status}>
+                  {status === 'success' ? <FiCheckCircle /> : <FiAlertCircle />}
+                  {message}
+                </StatusMessage>
             )}
 
-            <SubmitButton type="submit" disabled={isSubmitDisabled}>
-              <FiSave />
-              Опубликовать пост
+            <SubmitButton type="submit" disabled={!canSubmit}>
+              <FiSend />
+              {isSubmitting ? 'Публикуем...' : 'Опубликовать'}
             </SubmitButton>
           </FormCard>
 
-          <InfoColumn>
+          <SidePanel>
             <InfoCard>
-              <InfoIcon>
-                <FiInfo />
-              </InfoIcon>
+              <FiFile />
 
-              <h2>Как проверить</h2>
+              <h2>Что сохраняется</h2>
 
-              <p>
-                После создания пост сразу появится в mock-данных. Обычный пост
-                будет виден на главной ленте, Premium — только в закрытой ленте
-                у пользователя с подпиской.
-              </p>
-
-              <InfoLinks>
-                <InfoLink to="/">
-                  <FiGlobe />
-                  Открыть обычную ленту
-                </InfoLink>
-
-                <InfoLink to="/premium">
-                  <FiStar />
-                  Открыть Premium
-                </InfoLink>
-
-                <InfoLink to="/admin/posts">
-                  <FiFileText />
-                  Управление постами
-                </InfoLink>
-              </InfoLinks>
+              <Text>
+                Пост создается через `useCreateAdminPostMutation`. Сейчас mutation
+                работает с mock-хранилищем, а после подключения backend будет
+                отправлять данные на `/admin/posts`.
+              </Text>
             </InfoCard>
 
             <InfoCard>
-              <InfoIcon>
-                <FiAlertCircle />
-              </InfoIcon>
+              <FiRefreshCw />
 
-              <h2>Ограничение mock-режима</h2>
+              <h2>После публикации</h2>
 
-              <p>
-                Изображения можно временно сохранить в localStorage, если они не
-                слишком большие. Видео в localStorage не сохраняем, поэтому для
-                созданных видео-постов используется тестовый ролик.
-              </p>
+              <Text>
+                Пост сразу появится в обычной или Premium-ленте. Ленты обновляются
+                автоматически и подгружают публикации частями.
+              </Text>
             </InfoCard>
-          </InfoColumn>
-        </Grid>
+          </SidePanel>
+        </ContentGrid>
       </Page>
   );
-}
-
-function getSavedPosts(): Post[] {
-  const savedPosts = localStorage.getItem(MOCK_POSTS_KEY);
-
-  if (!savedPosts) {
-    return [];
-  }
-
-  try {
-    return JSON.parse(savedPosts) as Post[];
-  } catch {
-    localStorage.removeItem(MOCK_POSTS_KEY);
-    return [];
-  }
-}
-
-function createMockImageUrl(title: string) {
-  const svg = `
-    <svg width="1200" height="900" viewBox="0 0 1200 900" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect width="1200" height="900" fill="#080A12"/>
-      <circle cx="230" cy="180" r="370" fill="#7c3aed" opacity="0.55"/>
-      <circle cx="980" cy="720" r="430" fill="#2563eb" opacity="0.45"/>
-      <circle cx="860" cy="200" r="240" fill="#ef4444" opacity="0.25"/>
-      <rect x="90" y="90" width="1020" height="720" rx="52" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.18)" stroke-width="2"/>
-      <text x="120" y="445" fill="white" font-family="Inter, Arial, sans-serif" font-size="70" font-weight="900" letter-spacing="-4">${escapeSvgText(title)}</text>
-      <text x="124" y="510" fill="rgba(255,255,255,0.72)" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Admin created post</text>
-    </svg>
-  `;
-
-  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-}
-
-function escapeSvgText(text: string) {
-  return text
-      .replaceAll('&', '&amp;')
-      .replaceAll('<', '&lt;')
-      .replaceAll('>', '&gt;')
-      .replaceAll('"', '&quot;');
 }
 
 function formatFileSize(size: number) {
@@ -496,9 +406,9 @@ const Hero = styled.section`
   border: 1px solid ${({ theme }) => theme.colors.border};
   border-radius: ${({ theme }) => theme.radius.lg};
   background:
-    radial-gradient(circle at top left, rgba(124, 58, 237, 0.24), transparent 34%),
-    radial-gradient(circle at bottom right, rgba(239, 68, 68, 0.14), transparent 34%),
-    rgba(21, 25, 43, 0.86);
+      radial-gradient(circle at top left, rgba(124, 58, 237, 0.24), transparent 34%),
+      radial-gradient(circle at bottom right, rgba(239, 68, 68, 0.14), transparent 34%),
+      rgba(21, 25, 43, 0.86);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -538,29 +448,22 @@ const Subtitle = styled.p`
   line-height: 1.65;
 `;
 
-const BackLink = styled(Link)`
+const HeroIcon = styled.div`
   flex: 0 0 auto;
-  min-height: 46px;
-  padding: 0 16px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: ${({ theme }) => theme.radius.full};
-  background: rgba(255, 255, 255, 0.06);
-  color: ${({ theme }) => theme.colors.text};
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 9px;
-  font-weight: 900;
-
-  &:hover {
-    background: rgba(255, 255, 255, 0.1);
-    border-color: rgba(139, 92, 246, 0.46);
-  }
+  width: 76px;
+  height: 76px;
+  border-radius: 28px;
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  color: white;
+  display: grid;
+  place-items: center;
+  font-size: 36px;
+  box-shadow: 0 22px 50px rgba(124, 58, 237, 0.28);
 `;
 
-const Grid = styled.div`
+const ContentGrid = styled.div`
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 340px;
+  grid-template-columns: minmax(0, 1fr) 330px;
   gap: 18px;
 
   @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
@@ -569,259 +472,301 @@ const Grid = styled.div`
 `;
 
 const FormCard = styled.form`
-  padding: 20px;
+  min-width: 0;
+  padding: 18px;
   border: 1px solid ${({ theme }) => theme.colors.border};
   border-radius: ${({ theme }) => theme.radius.lg};
   background: rgba(21, 25, 43, 0.84);
   display: grid;
-  gap: 16px;
-
-  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-    padding: 16px;
-  }
+  gap: 18px;
 `;
 
-const SectionHeader = styled.div`
-  margin-bottom: 2px;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-
-  h2 {
-    margin: 4px 0 0;
-    font-size: 25px;
-    letter-spacing: -0.05em;
-  }
-`;
-
-const HeaderIcon = styled.div`
-  width: 44px;
-  height: 44px;
-  border-radius: 16px;
-  background: rgba(124, 58, 237, 0.14);
-  color: ${({ theme }) => theme.colors.primaryHover};
-  display: grid;
-  place-items: center;
-  font-size: 21px;
-`;
-
-const Field = styled.div`
+const FieldGroup = styled.div`
   display: grid;
   gap: 8px;
 `;
 
 const Label = styled.label`
-  color: ${({ theme }) => theme.colors.textMuted};
-  font-size: 13px;
-  font-weight: 800;
+  color: ${({ theme }) => theme.colors.text};
+  font-size: 14px;
+  font-weight: 900;
 `;
 
 const Input = styled.input`
-  height: 52px;
-  padding: 0 15px;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 14px;
   border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: 18px;
+  border-radius: 16px;
   outline: none;
   background: rgba(255, 255, 255, 0.045);
   color: ${({ theme }) => theme.colors.text};
 
   &::placeholder {
-    color: rgba(156, 163, 183, 0.68);
+    color: rgba(156, 163, 183, 0.7);
   }
 
   &:focus {
-    border-color: rgba(139, 92, 246, 0.8);
-    box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.14);
+    border-color: rgba(139, 92, 246, 0.72);
+    box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.12);
   }
 `;
 
 const Textarea = styled.textarea`
-  min-height: 160px;
-  resize: vertical;
-  padding: 15px;
+  width: 100%;
+  min-height: 150px;
+  padding: 14px;
   border: 1px solid ${({ theme }) => theme.colors.border};
   border-radius: 18px;
   outline: none;
+  resize: vertical;
   background: rgba(255, 255, 255, 0.045);
   color: ${({ theme }) => theme.colors.text};
   line-height: 1.55;
 
   &::placeholder {
-    color: rgba(156, 163, 183, 0.68);
+    color: rgba(156, 163, 183, 0.7);
   }
 
   &:focus {
-    border-color: rgba(139, 92, 246, 0.8);
-    box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.14);
+    border-color: rgba(139, 92, 246, 0.72);
+    box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.12);
   }
 `;
 
-const Counter = styled.span`
-  justify-self: end;
+const Hint = styled.div`
   color: ${({ theme }) => theme.colors.textMuted};
   font-size: 12px;
   font-weight: 700;
 `;
 
-const OptionsGrid = styled.div`
+const VisibilityGrid = styled.div`
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: 10px;
 
   @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
     grid-template-columns: 1fr;
   }
 `;
 
-const Segmented = styled.div`
-  padding: 5px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
+const VisibilityButton = styled.button<{ $active?: boolean }>`
+  padding: 14px;
+  border: 1px solid
+  ${({ theme, $active }) =>
+      $active ? 'rgba(139, 92, 246, 0.72)' : theme.colors.border};
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.04);
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 5px;
-`;
-
-const SegmentButton = styled.button<{ $active?: boolean }>`
-  min-height: 42px;
-  padding: 0 12px;
-  border: none;
-  border-radius: 14px;
   background: ${({ $active }) =>
-    $active
-        ? 'linear-gradient(135deg, rgba(124, 58, 237, 0.9), rgba(37, 99, 235, 0.82))'
-        : 'transparent'};
-  color: ${({ theme, $active }) =>
-    $active ? theme.colors.text : theme.colors.textMuted};
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  font-weight: 900;
-
-  &:hover {
-    color: ${({ theme }) => theme.colors.text};
-    background: ${({ $active }) =>
-    $active
-        ? 'linear-gradient(135deg, rgba(124, 58, 237, 0.9), rgba(37, 99, 235, 0.82))'
-        : 'rgba(255,255,255,0.06)'};
-  }
-`;
-
-const UploadBox = styled.label`
-  min-height: 142px;
-  padding: 18px;
-  border: 1px dashed rgba(139, 92, 246, 0.46);
-  border-radius: 22px;
-  background: rgba(124, 58, 237, 0.08);
+      $active
+          ? 'linear-gradient(135deg, rgba(124,58,237,0.24), rgba(37,99,235,0.14))'
+          : 'rgba(255,255,255,0.045)'};
+  color: ${({ theme }) => theme.colors.text};
   display: flex;
-  align-items: center;
-  gap: 16px;
-  cursor: pointer;
+  align-items: flex-start;
+  gap: 12px;
+  text-align: left;
 
-  input {
-    display: none;
-  }
-
-  &:hover {
-    background: rgba(124, 58, 237, 0.12);
-    border-color: rgba(139, 92, 246, 0.72);
-  }
-
-  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-`;
-
-const UploadIcon = styled.div`
-  flex: 0 0 auto;
-  width: 62px;
-  height: 62px;
-  border-radius: 22px;
-  background: linear-gradient(135deg, #7c3aed, #2563eb);
-  color: white;
-  display: grid;
-  place-items: center;
-  font-size: 30px;
-`;
-
-const UploadText = styled.div`
-  display: grid;
-  gap: 6px;
-
-  strong {
-    color: ${({ theme }) => theme.colors.text};
-    line-height: 1.35;
+  > svg {
+    flex: 0 0 auto;
+    margin-top: 2px;
+    color: ${({ $active }) => ($active ? '#c4b5fd' : '#9ca3af')};
+    font-size: 22px;
   }
 
   span {
-    color: ${({ theme }) => theme.colors.textMuted};
-    line-height: 1.5;
+    display: grid;
+    gap: 4px;
+  }
+
+  strong {
     font-size: 14px;
-  }
-`;
-
-const FileInfo = styled.div`
-  padding: 13px 14px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.04);
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 10px;
-
-  strong {
-    color: ${({ theme }) => theme.colors.text};
-  }
-
-  span {
-    color: ${({ theme }) => theme.colors.textMuted};
   }
 
   small {
-    margin-left: auto;
-    color: ${({ theme }) => theme.colors.primaryHover};
-    font-weight: 900;
+    color: ${({ theme }) => theme.colors.textMuted};
+    line-height: 1.35;
+    font-weight: 700;
+  }
+
+  &:hover {
+    border-color: rgba(139, 92, 246, 0.52);
+    background: rgba(255, 255, 255, 0.07);
   }
 `;
 
-const PreviewCard = styled.div`
-  overflow: hidden;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: 22px;
-  background: rgba(0, 0, 0, 0.22);
-
-  img,
-  video {
-    width: 100%;
-    max-height: 560px;
-    object-fit: cover;
-    background: #05060d;
-  }
+const HiddenFileInput = styled.input`
+  display: none;
 `;
 
-const PreviewHeader = styled.div`
-  padding: 13px 14px;
+const UploadZone = styled.button`
+  min-height: 260px;
+  padding: 24px;
+  border: 1px dashed rgba(139, 92, 246, 0.48);
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background:
+      radial-gradient(circle at top left, rgba(124, 58, 237, 0.18), transparent 34%),
+      rgba(255, 255, 255, 0.035);
+  color: ${({ theme }) => theme.colors.text};
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  justify-content: center;
+  gap: 11px;
+  text-align: center;
+
+  > svg {
+    color: ${({ theme }) => theme.colors.primaryHover};
+    font-size: 46px;
+  }
+
+  strong {
+    font-size: 22px;
+    letter-spacing: -0.04em;
+  }
+
+  span {
+    max-width: 460px;
+    color: ${({ theme }) => theme.colors.textMuted};
+    line-height: 1.55;
+  }
+
+  &:hover {
+    border-color: rgba(139, 92, 246, 0.76);
+    background:
+        radial-gradient(circle at top left, rgba(124, 58, 237, 0.24), transparent 34%),
+        rgba(255, 255, 255, 0.055);
+  }
+`;
+
+const SelectedFile = styled.div`
+  padding: 12px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background: rgba(255, 255, 255, 0.04);
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.tablet}) {
+    grid-template-columns: 140px minmax(0, 1fr);
+  }
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    grid-template-columns: 1fr;
+  }
+`;
+
+const PreviewBox = styled.div`
+  overflow: hidden;
+  height: 130px;
+  border-radius: 18px;
+  background: #05060d;
+
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+`;
+
+const PreviewPlaceholder = styled.div`
+  width: 100%;
+  height: 100%;
+  background:
+      radial-gradient(circle at top left, rgba(124, 58, 237, 0.28), transparent 36%),
+      radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.22), transparent 36%),
+      #080a12;
+  color: ${({ theme }) => theme.colors.primaryHover};
+  display: grid;
+  place-items: center;
+  font-size: 42px;
+`;
+
+const SelectedFileInfo = styled.div`
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+
+  strong {
+    overflow: hidden;
+    color: ${({ theme }) => theme.colors.text};
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   span {
     color: ${({ theme }) => theme.colors.textMuted};
     font-size: 13px;
-    font-weight: 800;
+    font-weight: 700;
+  }
+`;
+
+const FileTypeBadge = styled.div`
+  width: max-content;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: rgba(124, 58, 237, 0.14);
+  color: #ddd6fe;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 900;
+`;
+
+const RemoveFileButton = styled.button`
+  min-height: 42px;
+  padding: 0 13px;
+  border: 1px solid rgba(239, 68, 68, 0.32);
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: rgba(239, 68, 68, 0.1);
+  color: #fecaca;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-weight: 900;
+
+  &:hover {
+    background: rgba(239, 68, 68, 0.16);
+  }
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.tablet}) {
+    grid-column: 1 / -1;
+  }
+`;
+
+const StatusMessage = styled.div<{ $status: FormStatus }>`
+  padding: 13px 14px;
+  border: 1px solid
+  ${({ $status }) =>
+      $status === 'success'
+          ? 'rgba(34, 197, 94, 0.34)'
+          : 'rgba(239, 68, 68, 0.34)'};
+  border-radius: 18px;
+  background: ${({ $status }) =>
+      $status === 'success'
+          ? 'rgba(34, 197, 94, 0.1)'
+          : 'rgba(239, 68, 68, 0.1)'};
+  color: ${({ $status }) => ($status === 'success' ? '#bbf7d0' : '#fecaca')};
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  line-height: 1.45;
+  font-weight: 800;
+
+  svg {
+    flex: 0 0 auto;
+    margin-top: 2px;
   }
 `;
 
 const SubmitButton = styled.button`
-  min-height: 54px;
+  min-height: 52px;
   border: none;
-  border-radius: 19px;
+  border-radius: ${({ theme }) => theme.radius.full};
   background: linear-gradient(135deg, #7c3aed, #2563eb);
   color: white;
   display: inline-flex;
@@ -829,7 +774,7 @@ const SubmitButton = styled.button`
   justify-content: center;
   gap: 9px;
   font-weight: 900;
-  box-shadow: 0 18px 44px rgba(124, 58, 237, 0.24);
+  box-shadow: 0 18px 44px rgba(124, 58, 237, 0.22);
 
   &:hover:not(:disabled) {
     filter: brightness(1.08);
@@ -838,10 +783,12 @@ const SubmitButton = styled.button`
   &:disabled {
     opacity: 0.55;
     cursor: not-allowed;
+    box-shadow: none;
   }
 `;
 
-const InfoColumn = styled.aside`
+const SidePanel = styled.aside`
+  min-width: 0;
   display: grid;
   align-content: start;
   gap: 18px;
@@ -851,90 +798,23 @@ const InfoCard = styled.section`
   padding: 20px;
   border: 1px solid ${({ theme }) => theme.colors.border};
   border-radius: ${({ theme }) => theme.radius.lg};
-  background: rgba(21, 25, 43, 0.84);
+  background: rgba(21, 25, 43, 0.82);
+
+  > svg {
+    margin-bottom: 14px;
+    color: ${({ theme }) => theme.colors.primaryHover};
+    font-size: 34px;
+  }
 
   h2 {
-    margin: 14px 0 8px;
+    margin: 0 0 14px;
     font-size: 24px;
     letter-spacing: -0.05em;
   }
-
-  p {
-    margin: 0;
-    color: ${({ theme }) => theme.colors.textMuted};
-    line-height: 1.6;
-  }
 `;
 
-const InfoIcon = styled.div`
-  width: 48px;
-  height: 48px;
-  border-radius: 18px;
-  background: rgba(124, 58, 237, 0.14);
-  color: ${({ theme }) => theme.colors.primaryHover};
-  display: grid;
-  place-items: center;
-  font-size: 22px;
-`;
-
-const InfoLinks = styled.div`
-  margin-top: 16px;
-  display: grid;
-  gap: 9px;
-`;
-
-const InfoLink = styled(Link)`
-  min-height: 44px;
-  padding: 0 13px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: 15px;
-  background: rgba(255, 255, 255, 0.04);
-  color: ${({ theme }) => theme.colors.text};
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  font-weight: 800;
-
-  svg {
-    color: ${({ theme }) => theme.colors.primaryHover};
-  }
-
-  &:hover {
-    background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(139, 92, 246, 0.44);
-  }
-`;
-
-const SuccessBox = styled.div`
-  padding: 13px 14px;
-  border: 1px solid rgba(34, 197, 94, 0.32);
-  border-radius: 18px;
-  background: rgba(34, 197, 94, 0.1);
-  color: #bbf7d0;
-  display: flex;
-  gap: 10px;
-  line-height: 1.45;
-  font-weight: 700;
-
-  svg {
-    flex: 0 0 auto;
-    margin-top: 2px;
-  }
-`;
-
-const ErrorBox = styled.div`
-  padding: 13px 14px;
-  border: 1px solid rgba(239, 68, 68, 0.32);
-  border-radius: 18px;
-  background: rgba(239, 68, 68, 0.1);
-  color: #fecaca;
-  display: flex;
-  gap: 10px;
-  line-height: 1.45;
-  font-weight: 700;
-
-  svg {
-    flex: 0 0 auto;
-    margin-top: 2px;
-  }
+const Text = styled.p`
+  margin: 0;
+  color: ${({ theme }) => theme.colors.textMuted};
+  line-height: 1.6;
 `;

@@ -1,95 +1,379 @@
-import { useState } from 'react';
+import { MouseEvent } from 'react';
+import { Link } from 'react-router-dom';
+import { useDispatch, useSelector } from 'react-redux';
 import styled from 'styled-components';
-import { FiChevronDown, FiChevronUp, FiMessageCircle } from 'react-icons/fi';
+import {
+    FiBookmark,
+    FiHeart,
+    FiImage,
+    FiLock,
+    FiMessageCircle,
+    FiStar,
+    FiThumbsDown,
+    FiUser,
+    FiVideo,
+} from 'react-icons/fi';
 
+import type { AppDispatch, RootState } from '../../../app/store';
+import { openAuthModal } from '../../auth/slice/authSlice';
+import {
+    useDislikePostMutation,
+    useLikePostMutation,
+    useSavePostMutation,
+    useUnsavePostMutation,
+} from '../api/postApi';
 import type { Post } from '../model/postTypes';
-import { PostActions } from './PostActions';
-
-import { CommentForm } from '../../../features/post-interactions/CommentForm';
-import { CommentsList } from '../../../features/post-interactions/CommentsList';
+import { getMediaUrl } from '../../../shared/lib/getMediaUrl';
 
 interface PostCardProps {
     post: Post;
 }
 
 export function PostCard({ post }: PostCardProps) {
-    const [isCommentsOpen, setIsCommentsOpen] = useState(false);
+    const dispatch = useDispatch<AppDispatch>();
+
+    const { accessToken, user } = useSelector((state: RootState) => state.auth);
+
+    const [likePost, { isLoading: isLikeLoading }] = useLikePostMutation();
+    const [dislikePost, { isLoading: isDislikeLoading }] = useDislikePostMutation();
+    const [savePost, { isLoading: isSaveLoading }] = useSavePostMutation();
+    const [unsavePost, { isLoading: isUnsaveLoading }] = useUnsavePostMutation();
 
     const firstMedia = post.media[0];
+    const mediaUrl = getMediaUrl(firstMedia?.url);
+    const authorAvatarUrl = getMediaUrl(post.author.avatarUrl);
+
+    const isAuth = Boolean(accessToken);
+    const isActionLoading =
+        isLikeLoading || isDislikeLoading || isSaveLoading || isUnsaveLoading;
+
+    const canViewPremium =
+        post.visibility === 'PUBLIC' ||
+        user?.role === 'ADMIN' ||
+        user?.id === post.author.id ||
+        user?.hasPremium;
+
+    const handleProtectedAction = (
+        event: MouseEvent<HTMLButtonElement>,
+        reason: string
+    ) => {
+        if (isAuth) {
+            return true;
+        }
+
+        event.preventDefault();
+
+        dispatch(
+            openAuthModal({
+                mode: 'login',
+                reason,
+            })
+        );
+
+        return false;
+    };
+
+    const handleLike = async (event: MouseEvent<HTMLButtonElement>) => {
+        const canContinue = handleProtectedAction(
+            event,
+            'Чтобы поставить лайк, нужно войти в аккаунт.'
+        );
+
+        if (!canContinue) {
+            return;
+        }
+
+        try {
+            await likePost(post.id).unwrap();
+        } catch (error) {
+            window.alert(getErrorMessage(error, 'Не удалось обновить лайк.'));
+        }
+    };
+
+    const handleDislike = async (event: MouseEvent<HTMLButtonElement>) => {
+        const canContinue = handleProtectedAction(
+            event,
+            'Чтобы поставить дизлайк, нужно войти в аккаунт.'
+        );
+
+        if (!canContinue) {
+            return;
+        }
+
+        try {
+            await dislikePost(post.id).unwrap();
+        } catch (error) {
+            window.alert(getErrorMessage(error, 'Не удалось обновить дизлайк.'));
+        }
+    };
+
+    const handleSave = async (event: MouseEvent<HTMLButtonElement>) => {
+        const canContinue = handleProtectedAction(
+            event,
+            'Чтобы сохранять посты, нужно войти в аккаунт.'
+        );
+
+        if (!canContinue) {
+            return;
+        }
+
+        try {
+            if (post.isSavedByMe) {
+                await unsavePost(post.id).unwrap();
+            } else {
+                await savePost(post.id).unwrap();
+            }
+        } catch (error) {
+            window.alert(getErrorMessage(error, 'Не удалось обновить сохранение.'));
+        }
+    };
 
     return (
         <Card>
-            <CardHeader>
-                <Author>
-                    <AvatarWrapper>
-                        {post.author.avatarUrl ? (
-                            <Avatar src={post.author.avatarUrl} alt={post.author.nickname} />
-                        ) : (
-                            <AvatarFallback>
-                                {post.author.nickname.slice(0, 1).toUpperCase()}
-                            </AvatarFallback>
-                        )}
-                    </AvatarWrapper>
+            <MediaLink to={`/posts/${post.id}`}>
+                {firstMedia?.type === 'IMAGE' && mediaUrl ? (
+                    <MediaImage src={mediaUrl} alt={post.title || 'Публикация'} />
+                ) : firstMedia?.type === 'VIDEO' && mediaUrl ? (
+                    <MediaVideo src={mediaUrl} controls />
+                ) : (
+                    <MediaPlaceholder>
+                        {firstMedia?.type === 'VIDEO' ? <FiVideo /> : <FiImage />}
+                        <span>Медиа недоступно</span>
+                    </MediaPlaceholder>
+                )}
 
-                    <AuthorInfo>
-                        <strong>{post.author.nickname}</strong>
-                        <span>{new Date(post.createdAt).toLocaleDateString('ru-RU')}</span>
-                    </AuthorInfo>
-                </Author>
-
-                {post.visibility === 'PREMIUM' && <Badge>Premium</Badge>}
-            </CardHeader>
-
-            {firstMedia && (
-                <MediaBox>
-                    {firstMedia.type === 'IMAGE' ? (
-                        <img src={firstMedia.url} alt={post.title || 'Пост'} />
+                <VisibilityBadge $visibility={post.visibility}>
+                    {post.visibility === 'PREMIUM' ? (
+                        <>
+                            <FiStar />
+                            Premium
+                        </>
                     ) : (
-                        <video src={firstMedia.url} controls />
+                        <>
+                            <FiImage />
+                            Public
+                        </>
                     )}
-                </MediaBox>
-            )}
+                </VisibilityBadge>
 
-            <Content>
-                {post.title && <Title>{post.title}</Title>}
-                {post.description && <Description>{post.description}</Description>}
-            </Content>
+                {post.visibility === 'PREMIUM' && !canViewPremium && (
+                    <LockedOverlay>
+                        <FiLock />
+                        <span>Premium</span>
+                    </LockedOverlay>
+                )}
+            </MediaLink>
 
-            <PostActions post={post} />
+            <Body>
+                <AuthorRow>
+                    <Author>
+                        <AuthorAvatar>
+                            {authorAvatarUrl ? (
+                                <img src={authorAvatarUrl} alt={post.author.nickname} />
+                            ) : (
+                                <FiUser />
+                            )}
+                        </AuthorAvatar>
 
-            <CommentsToggle
-                type="button"
-                onClick={() => setIsCommentsOpen((current) => !current)}
-            >
-        <span>
-          <FiMessageCircle />
-            {post.commentsCount} комментариев
-        </span>
+                        <AuthorText>
+                            <strong>@{post.author.nickname}</strong>
+                            <span>{new Date(post.createdAt).toLocaleString('ru-RU')}</span>
+                        </AuthorText>
+                    </Author>
 
-                {isCommentsOpen ? <FiChevronUp /> : <FiChevronDown />}
-            </CommentsToggle>
+                    {post.visibility === 'PREMIUM' && (
+                        <PremiumPill>
+                            <FiStar />
+                            Premium
+                        </PremiumPill>
+                    )}
+                </AuthorRow>
 
-            {isCommentsOpen && (
-                <CommentsPanel>
-                    <CommentForm postId={post.id} />
-                    <Divider />
-                    <CommentsList postId={post.id} />
-                </CommentsPanel>
-            )}
+                <ContentLink to={`/posts/${post.id}`}>
+                    <Title>{post.title || 'Без названия'}</Title>
+
+                    {post.description ? (
+                        <Description>{post.description}</Description>
+                    ) : (
+                        <MutedDescription>Описание не указано</MutedDescription>
+                    )}
+                </ContentLink>
+
+                <Actions>
+                    <ActionButton
+                        type="button"
+                        $active={post.isLikedByMe}
+                        disabled={isActionLoading}
+                        onClick={handleLike}
+                    >
+                        <FiHeart />
+                        <span>{post.likesCount}</span>
+                    </ActionButton>
+
+                    <ActionButton
+                        type="button"
+                        $active={post.isDislikedByMe}
+                        disabled={isActionLoading}
+                        onClick={handleDislike}
+                    >
+                        <FiThumbsDown />
+                        <span>{post.dislikesCount}</span>
+                    </ActionButton>
+
+                    <CommentsLink to={`/posts/${post.id}`}>
+                        <FiMessageCircle />
+                        <span>{post.commentsCount}</span>
+                    </CommentsLink>
+
+                    <SaveButton
+                        type="button"
+                        $active={post.isSavedByMe}
+                        disabled={isActionLoading}
+                        onClick={handleSave}
+                    >
+                        <FiBookmark />
+                        <span>{post.isSavedByMe ? 'Сохранено' : 'Сохранить'}</span>
+                    </SaveButton>
+                </Actions>
+            </Body>
         </Card>
     );
 }
 
+function getErrorMessage(error: unknown, fallback: string) {
+    if (
+        typeof error === 'object' &&
+        error !== null &&
+        'data' in error &&
+        typeof (error as { data?: { message?: unknown } }).data?.message === 'string'
+    ) {
+        return (error as { data: { message: string } }).data.message;
+    }
+
+    return fallback;
+}
+
 const Card = styled.article`
-    overflow: hidden;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.lg};
-    background: rgba(21, 25, 43, 0.88);
-    box-shadow: 0 22px 60px rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background: rgba(21, 25, 43, 0.84);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.18);
 `;
 
-const CardHeader = styled.header`
-    padding: 14px;
+const MediaLink = styled(Link)`
+  position: relative;
+  overflow: hidden;
+  min-height: 320px;
+  background: #05060d;
+  display: block;
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    min-height: 240px;
+  }
+`;
+
+const MediaImage = styled.img`
+  width: 100%;
+  height: 420px;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.25s ease;
+
+  ${MediaLink}:hover & {
+    transform: scale(1.025);
+  }
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    height: 280px;
+  }
+`;
+
+const MediaVideo = styled.video`
+    width: 100%;
+    height: 420px;
+    object-fit: cover;
+    display: block;
+    background: #05060d;
+
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        height: 280px;
+    }
+`;
+
+const MediaPlaceholder = styled.div`
+    height: 420px;
+    background:
+            radial-gradient(circle at top left, rgba(124, 58, 237, 0.28), transparent 34%),
+            radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.2), transparent 34%),
+            #080a12;
+    color: ${({ theme }) => theme.colors.primaryHover};
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    gap: 10px;
+    font-weight: 900;
+
+    svg {
+        font-size: 48px;
+    }
+
+    span {
+        color: ${({ theme }) => theme.colors.textMuted};
+    }
+
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        height: 280px;
+    }
+`;
+
+const VisibilityBadge = styled.div<{ $visibility: Post['visibility'] }>`
+    position: absolute;
+    left: 14px;
+    top: 14px;
+    min-height: 34px;
+    padding: 0 12px;
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: ${({ $visibility }) =>
+            $visibility === 'PREMIUM'
+                    ? 'rgba(236, 72, 153, 0.9)'
+                    : 'rgba(37, 99, 235, 0.88)'};
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 900;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
+`;
+
+const LockedOverlay = styled.div`
+    position: absolute;
+    inset: 0;
+    background:
+            radial-gradient(circle at center, rgba(124, 58, 237, 0.18), transparent 42%),
+            rgba(5, 6, 13, 0.74);
+    backdrop-filter: blur(8px);
+    color: white;
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    gap: 10px;
+    font-weight: 900;
+
+    svg {
+        font-size: 42px;
+        color: #f9a8d4;
+    }
+`;
+
+const Body = styled.div`
+    padding: 16px;
+    display: grid;
+    gap: 14px;
+`;
+
+const AuthorRow = styled.div`
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -103,38 +387,33 @@ const Author = styled.div`
     gap: 10px;
 `;
 
-const AvatarWrapper = styled.div`
+const AuthorAvatar = styled.div`
     flex: 0 0 auto;
-`;
-
-const Avatar = styled.img`
-    width: 42px;
-    height: 42px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, #7c3aed, #2563eb);
-    object-fit: cover;
-`;
-
-const AvatarFallback = styled.div`
-    width: 42px;
-    height: 42px;
-    border-radius: 50%;
+    width: 44px;
+    height: 44px;
+    overflow: hidden;
+    border-radius: 16px;
     background: linear-gradient(135deg, #7c3aed, #2563eb);
     color: white;
     display: grid;
     place-items: center;
-    font-weight: 900;
+    font-size: 20px;
+
+    img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
 `;
 
-const AuthorInfo = styled.div`
+const AuthorText = styled.div`
     min-width: 0;
-    display: flex;
-    flex-direction: column;
+    display: grid;
     gap: 2px;
 
     strong {
         overflow: hidden;
-        font-size: 14px;
+        color: ${({ theme }) => theme.colors.text};
         text-overflow: ellipsis;
         white-space: nowrap;
     }
@@ -142,103 +421,119 @@ const AuthorInfo = styled.div`
     span {
         color: ${({ theme }) => theme.colors.textMuted};
         font-size: 12px;
+        font-weight: 700;
     }
 `;
 
-const Badge = styled.span`
+const PremiumPill = styled.div`
     flex: 0 0 auto;
-    padding: 6px 10px;
+    min-height: 32px;
+    padding: 0 10px;
+    border: 1px solid rgba(236, 72, 153, 0.28);
     border-radius: ${({ theme }) => theme.radius.full};
-    background: linear-gradient(135deg, #7c3aed, #ec4899);
-    color: white;
+    background: rgba(236, 72, 153, 0.12);
+    color: #f9a8d4;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
     font-size: 12px;
     font-weight: 900;
 `;
 
-const MediaBox = styled.div`
-    background: #05060d;
-
-    img,
-    video {
-        width: 100%;
-        max-height: 720px;
-        object-fit: cover;
-    }
-
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        img,
-        video {
-            max-height: 520px;
-        }
-    }
-`;
-
-const Content = styled.div`
-  padding: 14px 14px 4px;
+const ContentLink = styled(Link)`
+    color: inherit;
+    display: grid;
+    gap: 8px;
 `;
 
 const Title = styled.h2`
-  margin: 0 0 8px;
-  font-size: 19px;
-  letter-spacing: -0.03em;
+    margin: 0;
+    color: ${({ theme }) => theme.colors.text};
+    font-size: 24px;
+    letter-spacing: -0.055em;
+    line-height: 1.1;
 `;
 
 const Description = styled.p`
-  margin: 0;
-  color: ${({ theme }) => theme.colors.textMuted};
-  line-height: 1.55;
-  white-space: pre-wrap;
+    margin: 0;
+    color: ${({ theme }) => theme.colors.textMuted};
+    line-height: 1.55;
+    white-space: pre-wrap;
 `;
 
-const CommentsToggle = styled.button`
-  width: calc(100% - 28px);
-  min-height: 44px;
-  margin: 0 14px 14px;
-  padding: 0 13px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: ${({ theme }) => theme.radius.full};
-  background: rgba(255, 255, 255, 0.04);
-  color: ${({ theme }) => theme.colors.textMuted};
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  font-weight: 900;
+const MutedDescription = styled(Description)`
+    opacity: 0.65;
+    font-style: italic;
+`;
 
-  span {
+const Actions = styled.div`
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+`;
+
+const ActionButton = styled.button<{ $active?: boolean }>`
+    min-height: 40px;
+    padding: 0 12px;
+    border: 1px solid
+    ${({ theme, $active }) =>
+            $active ? 'rgba(139, 92, 246, 0.62)' : theme.colors.border};
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: ${({ $active }) =>
+            $active
+                    ? 'linear-gradient(135deg, rgba(124, 58, 237, 0.68), rgba(37, 99, 235, 0.56))'
+                    : 'rgba(255, 255, 255, 0.045)'};
+    color: ${({ theme }) => theme.colors.text};
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-  }
+    gap: 7px;
+    font-weight: 900;
 
-  svg {
-    flex: 0 0 auto;
-    font-size: 18px;
-  }
+    svg {
+        color: ${({ $active, theme }) =>
+                $active ? 'white' : theme.colors.primaryHover};
+    }
 
-  &:hover {
+    &:hover:not(:disabled) {
+        background: ${({ $active }) =>
+                $active
+                        ? 'linear-gradient(135deg, rgba(124, 58, 237, 0.78), rgba(37, 99, 235, 0.66))'
+                        : 'rgba(255, 255, 255, 0.08)'};
+    }
+
+    &:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+`;
+
+const CommentsLink = styled(Link)`
+    min-height: 40px;
+    padding: 0 12px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: rgba(255, 255, 255, 0.045);
     color: ${({ theme }) => theme.colors.text};
-    background: rgba(255, 255, 255, 0.075);
-    border-color: rgba(139, 92, 246, 0.42);
-  }
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-weight: 900;
 
-  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-    width: calc(100% - 24px);
-    margin: 0 12px 12px;
-  }
+    svg {
+        color: ${({ theme }) => theme.colors.primaryHover};
+    }
+
+    &:hover {
+        background: rgba(255, 255, 255, 0.08);
+    }
 `;
 
-const CommentsPanel = styled.div`
-  padding: 0 14px 16px;
-  display: grid;
-  gap: 14px;
+const SaveButton = styled(ActionButton)`
+    margin-left: auto;
 
-  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-    padding: 0 12px 14px;
-  }
-`;
-
-const Divider = styled.div`
-  height: 1px;
-  background: ${({ theme }) => theme.colors.border};
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        margin-left: 0;
+        width: 100%;
+        justify-content: center;
+    }
 `;

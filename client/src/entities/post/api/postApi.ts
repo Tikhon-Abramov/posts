@@ -1,7 +1,8 @@
 import { baseApi } from '../../../shared/api/baseApi';
-import type { Post } from '../model/postTypes';
+import type { MediaType, Post } from '../model/postTypes';
 import {
   applyMockUserStateToPosts,
+  applyMockUserStateToPost,
   createMockError,
   createMockImageUrl,
   createMockNotification,
@@ -15,16 +16,65 @@ import {
   type MockReaction,
 } from '../../../shared/lib/mockStorage';
 
+type FeedType = 'public' | 'premium';
+type MediaFilter = 'ALL' | MediaType;
+type SortMode = 'RECENT' | 'POPULAR';
+
 interface FeedParams {
-  type?: 'public' | 'premium';
+  type?: FeedType;
+  cursor?: string | null;
   page?: number;
   limit?: number;
+  search?: string;
+  mediaType?: MediaFilter;
+  sort?: SortMode;
 }
 
-interface FeedResponse {
+interface LatestFeedParams {
+  type?: FeedType;
+  after?: string | null;
+  search?: string;
+  mediaType?: MediaFilter;
+}
+
+interface SavedPostsParams {
+  cursor?: string | null;
+  page?: number;
+  limit?: number;
+  search?: string;
+  mediaType?: MediaFilter;
+  sort?: SortMode;
+}
+
+interface MyPostsParams {
+  cursor?: string | null;
+  page?: number;
+  limit?: number;
+  search?: string;
+  mediaType?: MediaFilter;
+  sort?: SortMode;
+}
+
+interface CursorFeedResponse {
+  items: Post[];
   posts: Post[];
+  nextCursor: string | null;
+  hasMore: boolean;
   page: number;
   totalPages: number;
+}
+
+interface LatestFeedResponse {
+  items: Post[];
+  hasNew: boolean;
+}
+
+interface PostsStatsResponse {
+  total: number;
+  imagesCount: number;
+  videosCount: number;
+  publicPosts?: number;
+  premiumPosts?: number;
 }
 
 const USE_MOCK_POSTS = import.meta.env.VITE_USE_MOCK_POSTS !== 'false';
@@ -173,16 +223,188 @@ function getMockPostsWithDefaults() {
   return getMockPosts();
 }
 
-function paginatePosts(posts: Post[], page = 1, limit = 10): FeedResponse {
-  const normalizedPage = Math.max(page, 1);
+function normalizeSearch(value?: string) {
+  return value?.trim().toLowerCase() || '';
+}
+
+function getPostPopularityScore(post: Post) {
+  return post.likesCount + post.commentsCount - post.dislikesCount;
+}
+
+function applySearchAndFilters({
+                                 posts,
+                                 search = '',
+                                 mediaType = 'ALL',
+                                 sort = 'RECENT',
+                               }: {
+  posts: Post[];
+  search?: string;
+  mediaType?: MediaFilter;
+  sort?: SortMode;
+}) {
+  const normalizedSearch = normalizeSearch(search);
+
+  return posts
+      .filter((post) => {
+        if (mediaType !== 'ALL' && post.media[0]?.type !== mediaType) {
+          return false;
+        }
+
+        if (!normalizedSearch) {
+          return true;
+        }
+
+        const title = post.title?.toLowerCase() || '';
+        const description = post.description?.toLowerCase() || '';
+        const author = post.author.nickname.toLowerCase();
+        const id = String(post.id);
+
+        return (
+            title.includes(normalizedSearch) ||
+            description.includes(normalizedSearch) ||
+            author.includes(normalizedSearch) ||
+            id.includes(normalizedSearch)
+        );
+      })
+      .sort((a, b) => {
+        if (sort === 'POPULAR') {
+          return getPostPopularityScore(b) - getPostPopularityScore(a);
+        }
+
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
+}
+
+function buildCursorResponse({
+                               posts,
+                               cursor = null,
+                               page,
+                               limit = 10,
+                             }: {
+  posts: Post[];
+  cursor?: string | null;
+  page?: number;
+  limit?: number;
+}): CursorFeedResponse {
   const normalizedLimit = Math.max(limit, 1);
-  const start = (normalizedPage - 1) * normalizedLimit;
-  const end = start + normalizedLimit;
+
+  if (page) {
+    const normalizedPage = Math.max(page, 1);
+    const start = (normalizedPage - 1) * normalizedLimit;
+    const end = start + normalizedLimit;
+    const items = posts.slice(start, end);
+    const nextPageFirstItem = posts[end];
+
+    return {
+      items,
+      posts: items,
+      nextCursor: nextPageFirstItem?.createdAt || null,
+      hasMore: end < posts.length,
+      page: normalizedPage,
+      totalPages: Math.max(Math.ceil(posts.length / normalizedLimit), 1),
+    };
+  }
+
+  const cursorTime = cursor ? new Date(cursor).getTime() : null;
+
+  const availablePosts = cursorTime
+      ? posts.filter((post) => new Date(post.createdAt).getTime() < cursorTime)
+      : posts;
+
+  const items = availablePosts.slice(0, normalizedLimit);
+  const nextItem = availablePosts[normalizedLimit];
 
   return {
-    posts: posts.slice(start, end),
-    page: normalizedPage,
+    items,
+    posts: items,
+    nextCursor: nextItem?.createdAt || null,
+    hasMore: availablePosts.length > normalizedLimit,
+    page: 1,
     totalPages: Math.max(Math.ceil(posts.length / normalizedLimit), 1),
+  };
+}
+
+function getFeedPosts({
+                        type = 'public',
+                        search = '',
+                        mediaType = 'ALL',
+                        sort = 'RECENT',
+                      }: {
+  type?: FeedType;
+  search?: string;
+  mediaType?: MediaFilter;
+  sort?: SortMode;
+}) {
+  const posts = getMockPostsWithDefaults();
+  const postsWithUserState = applyMockUserStateToPosts(posts);
+
+  const feedPosts = postsWithUserState.filter((post) =>
+      type === 'premium'
+          ? post.visibility === 'PREMIUM'
+          : post.visibility === 'PUBLIC'
+  );
+
+  return applySearchAndFilters({
+    posts: feedPosts,
+    search,
+    mediaType,
+    sort,
+  });
+}
+
+function getSavedFeedPosts({
+                             search = '',
+                             mediaType = 'ALL',
+                             sort = 'RECENT',
+                           }: {
+  search?: string;
+  mediaType?: MediaFilter;
+  sort?: SortMode;
+}) {
+  const posts = getMockPostsWithDefaults();
+  const postsWithUserState = applyMockUserStateToPosts(posts);
+
+  return applySearchAndFilters({
+    posts: postsWithUserState.filter((post) => post.isSavedByMe),
+    search,
+    mediaType,
+    sort,
+  });
+}
+
+function getMyFeedPosts({
+                          search = '',
+                          mediaType = 'ALL',
+                          sort = 'RECENT',
+                        }: {
+  search?: string;
+  mediaType?: MediaFilter;
+  sort?: SortMode;
+}) {
+  const user = getCurrentMockUser();
+
+  if (!user) {
+    return [];
+  }
+
+  const posts = getMockPostsWithDefaults();
+  const postsWithUserState = applyMockUserStateToPosts(posts);
+
+  return applySearchAndFilters({
+    posts: postsWithUserState.filter((post) => post.author.id === user.id),
+    search,
+    mediaType,
+    sort,
+  });
+}
+
+function buildPostsStats(posts: Post[]): PostsStatsResponse {
+  return {
+    total: posts.length,
+    imagesCount: posts.filter((post) => post.media[0]?.type === 'IMAGE').length,
+    videosCount: posts.filter((post) => post.media[0]?.type === 'VIDEO').length,
+    publicPosts: posts.filter((post) => post.visibility === 'PUBLIC').length,
+    premiumPosts: posts.filter((post) => post.visibility === 'PREMIUM').length,
   };
 }
 
@@ -317,65 +539,191 @@ function updatePostSaved(postId: number, saved: boolean) {
 
 export const postApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
-    getFeed: builder.query<FeedResponse, FeedParams>({
+
+    getPostById: builder.query<Post, number>({
+      async queryFn(postId, _api, _extraOptions, baseQuery) {
+        if (!USE_MOCK_POSTS) {
+          const result = await baseQuery(`/posts/${postId}`);
+
+          if (result.error) {
+            return { error: result.error };
+          }
+
+          return { data: result.data as Post };
+        }
+
+        await delay(100);
+
+        const post = getMockPostsWithDefaults().find((item) => item.id === postId);
+
+        if (!post) {
+          return {
+            error: createMockError(404, 'Пост не найден.'),
+          };
+        }
+
+        return {
+          data: applyMockUserStateToPost(post),
+        };
+      },
+      providesTags: ['Post'],
+    }),
+
+    getFeed: builder.query<CursorFeedResponse, FeedParams>({
       async queryFn(
-          { type = 'public', page = 1, limit = 10 },
+          {
+            type = 'public',
+            cursor = null,
+            page,
+            limit = 10,
+            search = '',
+            mediaType = 'ALL',
+            sort = 'RECENT',
+          },
           _api,
           _extraOptions,
           baseQuery
       ) {
         if (!USE_MOCK_POSTS) {
           const result = await baseQuery({
-            url: '/posts/feed',
-            params: { type, page, limit },
+            url: `/posts/feed/${type}`,
+            params: {
+              cursor,
+              page,
+              limit,
+              search,
+              mediaType,
+              sort,
+            },
           });
 
           if (result.error) {
             return { error: result.error };
           }
 
-          return { data: result.data as FeedResponse };
+          const data = result.data as CursorFeedResponse;
+
+          return {
+            data: {
+              ...data,
+              posts: data.posts || data.items,
+            },
+          };
         }
 
-        await delay();
+        await delay(120);
 
-        const posts = getMockPostsWithDefaults();
-        const postsWithUserState = applyMockUserStateToPosts(posts);
-
-        const filteredPosts = postsWithUserState
-            .filter((post) =>
-                type === 'premium'
-                    ? post.visibility === 'PREMIUM'
-                    : post.visibility === 'PUBLIC'
-            )
-            .sort(
-                (a, b) =>
-                    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-            );
+        const filteredPosts = getFeedPosts({
+          type,
+          search,
+          mediaType,
+          sort,
+        });
 
         return {
-          data: paginatePosts(filteredPosts, page, limit),
+          data: buildCursorResponse({
+            posts: filteredPosts,
+            cursor,
+            page,
+            limit,
+          }),
         };
       },
       providesTags: ['Post'],
     }),
 
-    getSavedPosts: builder.query<FeedResponse, { page?: number; limit?: number }>({
-      async queryFn({ page = 1, limit = 10 }, _api, _extraOptions, baseQuery) {
+    getLatestFeedPosts: builder.query<LatestFeedResponse, LatestFeedParams>({
+      async queryFn(
+          {
+            type = 'public',
+            after = null,
+            search = '',
+            mediaType = 'ALL',
+          },
+          _api,
+          _extraOptions,
+          baseQuery
+      ) {
         if (!USE_MOCK_POSTS) {
           const result = await baseQuery({
-            url: '/posts/saved',
-            params: { page, limit },
+            url: `/posts/feed/${type}/latest`,
+            params: {
+              after,
+              search,
+              mediaType,
+            },
           });
 
           if (result.error) {
             return { error: result.error };
           }
 
-          return { data: result.data as FeedResponse };
+          return { data: result.data as LatestFeedResponse };
         }
 
-        await delay();
+        await delay(80);
+
+        const afterTime = after ? new Date(after).getTime() : 0;
+
+        const items = getFeedPosts({
+          type,
+          search,
+          mediaType,
+          sort: 'RECENT',
+        }).filter((post) => new Date(post.createdAt).getTime() > afterTime);
+
+        return {
+          data: {
+            items,
+            hasNew: items.length > 0,
+          },
+        };
+      },
+      providesTags: ['Post'],
+    }),
+
+    getSavedPosts: builder.query<CursorFeedResponse, SavedPostsParams>({
+      async queryFn(
+          {
+            cursor = null,
+            page,
+            limit = 10,
+            search = '',
+            mediaType = 'ALL',
+            sort = 'RECENT',
+          },
+          _api,
+          _extraOptions,
+          baseQuery
+      ) {
+        if (!USE_MOCK_POSTS) {
+          const result = await baseQuery({
+            url: '/posts/saved',
+            params: {
+              cursor,
+              page,
+              limit,
+              search,
+              mediaType,
+              sort,
+            },
+          });
+
+          if (result.error) {
+            return { error: result.error };
+          }
+
+          const data = result.data as CursorFeedResponse;
+
+          return {
+            data: {
+              ...data,
+              posts: data.posts || data.items,
+            },
+          };
+        }
+
+        await delay(120);
 
         const user = getCurrentMockUser();
 
@@ -385,18 +733,156 @@ export const postApi = baseApi.injectEndpoints({
           };
         }
 
-        const posts = getMockPostsWithDefaults();
-        const postsWithUserState = applyMockUserStateToPosts(posts);
-
-        const savedPosts = postsWithUserState
-            .filter((post) => post.isSavedByMe)
-            .sort(
-                (a, b) =>
-                    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-            );
+        const savedPosts = getSavedFeedPosts({
+          search,
+          mediaType,
+          sort,
+        });
 
         return {
-          data: paginatePosts(savedPosts, page, limit),
+          data: buildCursorResponse({
+            posts: savedPosts,
+            cursor,
+            page,
+            limit,
+          }),
+        };
+      },
+      providesTags: ['Post'],
+    }),
+
+    getSavedPostsStats: builder.query<PostsStatsResponse, void>({
+      async queryFn(_arg, _api, _extraOptions, baseQuery) {
+        if (!USE_MOCK_POSTS) {
+          const result = await baseQuery('/posts/saved/stats');
+
+          if (result.error) {
+            return { error: result.error };
+          }
+
+          return { data: result.data as PostsStatsResponse };
+        }
+
+        await delay(80);
+
+        const user = getCurrentMockUser();
+
+        if (!user) {
+          return {
+            error: createMockError(401, 'Нужно войти в аккаунт.'),
+          };
+        }
+
+        return {
+          data: buildPostsStats(
+              getSavedFeedPosts({
+                search: '',
+                mediaType: 'ALL',
+                sort: 'RECENT',
+              })
+          ),
+        };
+      },
+      providesTags: ['Post'],
+    }),
+
+    getMyPosts: builder.query<CursorFeedResponse, MyPostsParams>({
+      async queryFn(
+          {
+            cursor = null,
+            page,
+            limit = 10,
+            search = '',
+            mediaType = 'ALL',
+            sort = 'RECENT',
+          },
+          _api,
+          _extraOptions,
+          baseQuery
+      ) {
+        if (!USE_MOCK_POSTS) {
+          const result = await baseQuery({
+            url: '/posts/my',
+            params: {
+              cursor,
+              page,
+              limit,
+              search,
+              mediaType,
+              sort,
+            },
+          });
+
+          if (result.error) {
+            return { error: result.error };
+          }
+
+          const data = result.data as CursorFeedResponse;
+
+          return {
+            data: {
+              ...data,
+              posts: data.posts || data.items,
+            },
+          };
+        }
+
+        await delay(120);
+
+        const user = getCurrentMockUser();
+
+        if (!user) {
+          return {
+            error: createMockError(401, 'Нужно войти в аккаунт.'),
+          };
+        }
+
+        return {
+          data: buildCursorResponse({
+            posts: getMyFeedPosts({
+              search,
+              mediaType,
+              sort,
+            }),
+            cursor,
+            page,
+            limit,
+          }),
+        };
+      },
+      providesTags: ['Post'],
+    }),
+
+    getMyPostsStats: builder.query<PostsStatsResponse, void>({
+      async queryFn(_arg, _api, _extraOptions, baseQuery) {
+        if (!USE_MOCK_POSTS) {
+          const result = await baseQuery('/posts/my/stats');
+
+          if (result.error) {
+            return { error: result.error };
+          }
+
+          return { data: result.data as PostsStatsResponse };
+        }
+
+        await delay(80);
+
+        const user = getCurrentMockUser();
+
+        if (!user) {
+          return {
+            error: createMockError(401, 'Нужно войти в аккаунт.'),
+          };
+        }
+
+        return {
+          data: buildPostsStats(
+              getMyFeedPosts({
+                search: '',
+                mediaType: 'ALL',
+                sort: 'RECENT',
+              })
+          ),
         };
       },
       providesTags: ['Post'],
@@ -417,7 +903,7 @@ export const postApi = baseApi.injectEndpoints({
           return { data: result.data as { message: string } };
         }
 
-        await delay(180);
+        await delay(100);
 
         return updatePostReaction(postId, 'like');
       },
@@ -439,7 +925,7 @@ export const postApi = baseApi.injectEndpoints({
           return { data: result.data as { message: string } };
         }
 
-        await delay(180);
+        await delay(100);
 
         return updatePostReaction(postId, 'dislike');
       },
@@ -461,7 +947,7 @@ export const postApi = baseApi.injectEndpoints({
           return { data: result.data as { message: string } };
         }
 
-        await delay(180);
+        await delay(100);
 
         return updatePostSaved(postId, true);
       },
@@ -483,7 +969,7 @@ export const postApi = baseApi.injectEndpoints({
           return { data: result.data as { message: string } };
         }
 
-        await delay(180);
+        await delay(100);
 
         return updatePostSaved(postId, false);
       },
@@ -494,9 +980,14 @@ export const postApi = baseApi.injectEndpoints({
 
 export const {
   useGetFeedQuery,
+  useGetLatestFeedPostsQuery,
   useGetSavedPostsQuery,
+  useGetSavedPostsStatsQuery,
+  useGetMyPostsQuery,
+  useGetMyPostsStatsQuery,
   useLikePostMutation,
   useDislikePostMutation,
   useSavePostMutation,
   useUnsavePostMutation,
+  useGetPostByIdQuery
 } = postApi;

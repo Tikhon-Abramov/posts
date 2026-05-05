@@ -1,25 +1,39 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import styled from 'styled-components';
 import {
     FiAlertCircle,
     FiBookmark,
     FiFilter,
     FiImage,
+    FiLoader,
     FiRefreshCw,
     FiSearch,
     FiVideo,
 } from 'react-icons/fi';
 
-import { useGetSavedPostsQuery } from '../entities/post/api/postApi';
+import {
+    useGetSavedPostsQuery,
+    useGetSavedPostsStatsQuery,
+} from '../entities/post/api/postApi';
+import type { MediaType, Post } from '../entities/post/model/postTypes';
 import { PostGrid } from '../entities/post/ui/PostGrid';
 
-type MediaFilter = 'ALL' | 'IMAGE' | 'VIDEO';
+type MediaFilter = 'ALL' | MediaType;
 type SortMode = 'RECENT' | 'POPULAR';
 
+const FEED_LIMIT = 10;
+
 export function SavedPostsPage() {
+    const loadMoreRef = useRef<HTMLDivElement | null>(null);
+
     const [searchQuery, setSearchQuery] = useState('');
     const [mediaFilter, setMediaFilter] = useState<MediaFilter>('ALL');
     const [sortMode, setSortMode] = useState<SortMode>('RECENT');
+
+    const [cursor, setCursor] = useState<string | null>(null);
+    const [loadedPosts, setLoadedPosts] = useState<Post[]>([]);
+    const [nextCursor, setNextCursor] = useState<string | null>(null);
+    const [hasMore, setHasMore] = useState(true);
 
     const {
         data,
@@ -28,46 +42,80 @@ export function SavedPostsPage() {
         isError,
         refetch,
     } = useGetSavedPostsQuery({
-        page: 1,
-        limit: 50,
+        cursor,
+        limit: FEED_LIMIT,
+        search: searchQuery,
+        mediaType: mediaFilter,
+        sort: sortMode,
     });
 
-    const posts = data?.posts || [];
+    const {
+        data: stats,
+        isLoading: isStatsLoading,
+        refetch: refetchStats,
+    } = useGetSavedPostsStatsQuery();
 
-    const filteredPosts = useMemo(() => {
-        const normalizedQuery = searchQuery.trim().toLowerCase();
+    const isFirstLoading = isLoading && loadedPosts.length === 0;
+    const isLoadingMore = isFetching && loadedPosts.length > 0;
 
-        return posts
-            .filter((post) => {
-                if (mediaFilter !== 'ALL' && post.media[0]?.type !== mediaFilter) {
-                    return false;
+    useEffect(() => {
+        if (!data) {
+            return;
+        }
+
+        const items = data.items || data.posts || [];
+
+        setLoadedPosts((currentPosts) => {
+            if (!cursor) {
+                return items;
+            }
+
+            return mergePostsKeepingOrder(currentPosts, items);
+        });
+
+        setNextCursor(data.nextCursor);
+        setHasMore(data.hasMore);
+    }, [cursor, data]);
+
+    useEffect(() => {
+        setCursor(null);
+        setLoadedPosts([]);
+        setNextCursor(null);
+        setHasMore(true);
+    }, [mediaFilter, searchQuery, sortMode]);
+
+    useEffect(() => {
+        const target = loadMoreRef.current;
+
+        if (!target) {
+            return;
+        }
+
+        const observer = new IntersectionObserver(
+            ([entry]) => {
+                if (!entry.isIntersecting) {
+                    return;
                 }
 
-                if (!normalizedQuery) {
-                    return true;
+                if (!hasMore || isFetching || !nextCursor) {
+                    return;
                 }
 
-                const title = post.title?.toLowerCase() || '';
-                const description = post.description?.toLowerCase() || '';
-                const author = post.author.nickname.toLowerCase();
+                setCursor(nextCursor);
+            },
+            {
+                root: null,
+                rootMargin: '700px 0px',
+                threshold: 0,
+            }
+        );
 
-                return (
-                    title.includes(normalizedQuery) ||
-                    description.includes(normalizedQuery) ||
-                    author.includes(normalizedQuery)
-                );
-            })
-            .sort((a, b) => {
-                if (sortMode === 'POPULAR') {
-                    const aScore = a.likesCount + a.commentsCount - a.dislikesCount;
-                    const bScore = b.likesCount + b.commentsCount - b.dislikesCount;
+        observer.observe(target);
 
-                    return bScore - aScore;
-                }
-
-                return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-            });
-    }, [mediaFilter, posts, searchQuery, sortMode]);
+        return () => {
+            observer.disconnect();
+        };
+    }, [hasMore, isFetching, nextCursor]);
 
     const resetFilters = () => {
         setSearchQuery('');
@@ -75,7 +123,16 @@ export function SavedPostsPage() {
         setSortMode('RECENT');
     };
 
-    if (isLoading) {
+    const handleRefetch = () => {
+        setCursor(null);
+        setLoadedPosts([]);
+        setNextCursor(null);
+        setHasMore(true);
+        refetch();
+        refetchStats();
+    };
+
+    if (isFirstLoading) {
         return (
             <StateCard>
                 <FiBookmark />
@@ -85,14 +142,14 @@ export function SavedPostsPage() {
         );
     }
 
-    if (isError) {
+    if (isError && !loadedPosts.length) {
         return (
             <StateCard>
                 <FiAlertCircle />
                 <h1>Не удалось загрузить сохраненные</h1>
                 <p>Попробуйте обновить список сохраненных публикаций.</p>
 
-                <PrimaryButton type="button" onClick={() => refetch()}>
+                <PrimaryButton type="button" onClick={handleRefetch}>
                     <FiRefreshCw />
                     Повторить
                 </PrimaryButton>
@@ -122,11 +179,17 @@ export function SavedPostsPage() {
 
             <StatsGrid>
                 <StatCard>
+                    <FiBookmark />
+                    <div>
+                        <strong>{isStatsLoading ? '...' : stats?.total || 0}</strong>
+                        <span>Всего сохранено</span>
+                    </div>
+                </StatCard>
+
+                <StatCard>
                     <FiImage />
                     <div>
-                        <strong>
-                            {filteredPosts.filter((post) => post.media[0]?.type === 'IMAGE').length}
-                        </strong>
+                        <strong>{isStatsLoading ? '...' : stats?.imagesCount || 0}</strong>
                         <span>Фото</span>
                     </div>
                 </StatCard>
@@ -134,18 +197,8 @@ export function SavedPostsPage() {
                 <StatCard>
                     <FiVideo />
                     <div>
-                        <strong>
-                            {filteredPosts.filter((post) => post.media[0]?.type === 'VIDEO').length}
-                        </strong>
+                        <strong>{isStatsLoading ? '...' : stats?.videosCount || 0}</strong>
                         <span>Видео</span>
-                    </div>
-                </StatCard>
-
-                <StatCard>
-                    <FiBookmark />
-                    <div>
-                        <strong>{filteredPosts.length}</strong>
-                        <span>Найдено</span>
                     </div>
                 </StatCard>
             </StatsGrid>
@@ -187,24 +240,46 @@ export function SavedPostsPage() {
                         Сбросить
                     </ResetButton>
 
-                    <RefreshButton
-                        type="button"
-                        disabled={isFetching}
-                        onClick={() => refetch()}
-                    >
+                    <RefreshButton type="button" disabled={isFetching} onClick={handleRefetch}>
                         <FiRefreshCw />
-                        {isFetching ? 'Обновляем...' : 'Обновить'}
+                        Обновить
                     </RefreshButton>
                 </ToolbarActions>
             </Toolbar>
 
-            {filteredPosts.length ? (
-                <PostGrid posts={filteredPosts} />
-            ) : posts.length ? (
+            {loadedPosts.length ? (
+                <>
+                    <FeedMeta>
+                        <span>Загружено на странице: {loadedPosts.length}</span>
+
+                        {isLoadingMore && (
+                            <LoadingInline>
+                                <FiLoader />
+                                Подгружаем еще...
+                            </LoadingInline>
+                        )}
+                    </FeedMeta>
+
+                    <PostGrid posts={loadedPosts} />
+
+                    <LoadMoreAnchor ref={loadMoreRef}>
+                        {hasMore ? (
+                            <LoadingMore>
+                                <FiLoader />
+                                <span>Листайте ниже — сохраненные посты подгрузятся автоматически</span>
+                            </LoadingMore>
+                        ) : (
+                            <EndMessage>
+                                Вы посмотрели все сохраненные посты по текущим фильтрам
+                            </EndMessage>
+                        )}
+                    </LoadMoreAnchor>
+                </>
+            ) : (
                 <EmptyCard>
                     <FiSearch />
 
-                    <h2>По фильтрам ничего не найдено</h2>
+                    <h2>Сохраненных постов не найдено</h2>
 
                     <p>
                         Попробуйте изменить поисковую фразу, выбрать другой тип медиа или
@@ -215,64 +290,63 @@ export function SavedPostsPage() {
                         Сбросить фильтры
                     </EmptyButton>
                 </EmptyCard>
-            ) : (
-                <EmptyCard>
-                    <FiBookmark />
-
-                    <h2>Сохраненных постов пока нет</h2>
-
-                    <p>
-                        Нажмите кнопку сохранения под любым постом, и публикация появится в
-                        этом разделе.
-                    </p>
-                </EmptyCard>
             )}
         </Page>
     );
 }
 
+function mergePostsKeepingOrder(first: Post[], second: Post[]) {
+    const map = new Map<number, Post>();
+
+    [...first, ...second].forEach((post) => {
+        map.set(post.id, post);
+    });
+
+    return Array.from(map.values());
+}
+
 const Page = styled.div`
-  display: grid;
-  gap: 18px;
+    display: grid;
+    gap: 18px;
 `;
 
 const Hero = styled.section`
-  padding: 22px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: ${({ theme }) => theme.radius.lg};
-  background:
-    radial-gradient(circle at top left, rgba(124, 58, 237, 0.22), transparent 34%),
-    radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.16), transparent 34%),
-    rgba(21, 25, 43, 0.86);
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
+    padding: 22px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: ${({ theme }) => theme.radius.lg};
+    background:
+            radial-gradient(circle at top left, rgba(124, 58, 237, 0.22), transparent 34%),
+            radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.16), transparent 34%),
+            rgba(21, 25, 43, 0.86);
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 18px;
 
-  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-    flex-direction: column;
-    padding: 18px;
-  }
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        flex-direction: column;
+        padding: 18px;
+    }
 `;
 
 const HeroContent = styled.div`
-  min-width: 0;
+    min-width: 0;
 `;
 
 const Eyebrow = styled.div`
-  margin-bottom: 8px;
-  color: ${({ theme }) => theme.colors.primaryHover};
-  font-size: 13px;
-  font-weight: 900;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+    margin-bottom: 8px;
+    color: ${({ theme }) => theme.colors.primaryHover};
+    font-size: 13px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
 `;
 
 const Title = styled.h1`
-  margin: 0;
-  font-size: clamp(30px, 5vw, 52px);
-  line-height: 0.96;
-  letter-spacing: -0.075em;
+    margin: 0;
+    font-size: clamp(30px, 5vw, 52px);
+    line-height: 0.96;
+    letter-spacing: -0.075em;
 `;
 
 const Subtitle = styled.p`
@@ -477,104 +551,173 @@ const ResetButton = styled.button`
     }
 `;
 
-const EmptyCard = styled.section`
-    min-height: 440px;
-    padding: 30px 22px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.lg};
-    background:
-            radial-gradient(circle at top left, rgba(124, 58, 237, 0.2), transparent 34%),
-            rgba(21, 25, 43, 0.86);
+const FeedMeta = styled.div`
+    padding: 0 4px;
+    color: ${({ theme }) => theme.colors.textMuted};
     display: flex;
-    flex-direction: column;
     align-items: center;
-    justify-content: center;
-    text-align: center;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 13px;
+    font-weight: 800;
 
-    > svg {
-        margin-bottom: 16px;
-        color: ${({ theme }) => theme.colors.primaryHover};
-        font-size: 44px;
-    }
-
-    h2 {
-        margin: 0 0 10px;
-        font-size: clamp(26px, 4vw, 40px);
-        letter-spacing: -0.06em;
-    }
-
-    p {
-        max-width: 520px;
-        margin: 0;
-        color: ${({ theme }) => theme.colors.textMuted};
-        line-height: 1.6;
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        align-items: flex-start;
+        flex-direction: column;
     }
 `;
 
-const EmptyButton = styled.button`
-    min-height: 46px;
-    margin-top: 22px;
-    padding: 0 16px;
-    border: none;
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: linear-gradient(135deg, #7c3aed, #2563eb);
-    color: white;
-    font-weight: 900;
+const LoadingInline = styled.div`
+    color: ${({ theme }) => theme.colors.primaryHover};
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
 
-    &:hover {
-        filter: brightness(1.08);
+    svg {
+        animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+        to {
+            transform: rotate(360deg);
+        }
     }
 `;
 
-const PrimaryButton = styled.button`
-    min-height: 48px;
-    margin-top: 22px;
-    padding: 0 18px;
-    border: none;
+const LoadMoreAnchor = styled.div`
+    min-height: 80px;
+    display: grid;
+    place-items: center;
+`;
+
+const LoadingMore = styled.div`
+    padding: 12px 16px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
     border-radius: ${({ theme }) => theme.radius.full};
-    background: linear-gradient(135deg, #7c3aed, #2563eb);
-    color: white;
+    background: rgba(255, 255, 255, 0.045);
+    color: ${({ theme }) => theme.colors.textMuted};
     display: inline-flex;
     align-items: center;
     gap: 9px;
+    font-size: 13px;
     font-weight: 900;
-    box-shadow: 0 18px 44px rgba(124, 58, 237, 0.22);
 
-    &:hover {
-        filter: brightness(1.08);
+    svg {
+        color: ${({ theme }) => theme.colors.primaryHover};
+        animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+        to {
+            transform: rotate(360deg);
+        }
     }
 `;
 
+const EndMessage = styled.div`
+  color: ${({ theme }) => theme.colors.textMuted};
+  font-size: 13px;
+  font-weight: 800;
+`;
+
+const EmptyCard = styled.section`
+  min-height: 440px;
+  padding: 30px 22px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background:
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.2), transparent 34%),
+    rgba(21, 25, 43, 0.86);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+
+  > svg {
+    margin-bottom: 16px;
+    color: ${({ theme }) => theme.colors.primaryHover};
+    font-size: 44px;
+  }
+
+  h2 {
+    margin: 0 0 10px;
+    font-size: clamp(26px, 4vw, 40px);
+    letter-spacing: -0.06em;
+  }
+
+  p {
+    max-width: 520px;
+    margin: 0;
+    color: ${({ theme }) => theme.colors.textMuted};
+    line-height: 1.6;
+  }
+`;
+
+const EmptyButton = styled.button`
+  min-height: 46px;
+  margin-top: 22px;
+  padding: 0 16px;
+  border: none;
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  color: white;
+  font-weight: 900;
+
+  &:hover {
+    filter: brightness(1.08);
+  }
+`;
+
+const PrimaryButton = styled.button`
+  min-height: 48px;
+  margin-top: 22px;
+  padding: 0 18px;
+  border: none;
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  color: white;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 900;
+  box-shadow: 0 18px 44px rgba(124, 58, 237, 0.22);
+
+  &:hover {
+    filter: brightness(1.08);
+  }
+`;
+
 const StateCard = styled.section`
-    min-height: 420px;
-    padding: 30px 22px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.lg};
-    background:
-            radial-gradient(circle at top left, rgba(124, 58, 237, 0.2), transparent 34%),
-            rgba(21, 25, 43, 0.86);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
+  min-height: 420px;
+  padding: 30px 22px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background:
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.2), transparent 34%),
+    rgba(21, 25, 43, 0.86);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
 
-    > svg {
-        margin-bottom: 16px;
-        color: ${({ theme }) => theme.colors.primaryHover};
-        font-size: 44px;
-    }
+  > svg {
+    margin-bottom: 16px;
+    color: ${({ theme }) => theme.colors.primaryHover};
+    font-size: 44px;
+  }
 
-    h1 {
-        margin: 0 0 10px;
-        font-size: clamp(26px, 4vw, 40px);
-        letter-spacing: -0.06em;
-    }
+  h1 {
+    margin: 0 0 10px;
+    font-size: clamp(26px, 4vw, 40px);
+    letter-spacing: -0.06em;
+  }
 
-    p {
-        max-width: 500px;
-        margin: 0;
-        color: ${({ theme }) => theme.colors.textMuted};
-        line-height: 1.6;
-    }
+  p {
+    max-width: 500px;
+    margin: 0;
+    color: ${({ theme }) => theme.colors.textMuted};
+    line-height: 1.6;
+  }
 `;

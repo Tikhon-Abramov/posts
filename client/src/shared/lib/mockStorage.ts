@@ -1,8 +1,13 @@
 import type { AuthUser } from '../../entities/auth/model/authTypes';
-import type { Post, MediaType, PostVisibility } from '../../entities/post/model/postTypes';
+import type {
+    MediaType,
+    Post,
+    PostVisibility,
+} from '../../entities/post/model/postTypes';
 import type { PostComment } from '../../entities/post/model/commentTypes';
 
 export type RequestStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+export type RequestStatusFilter = 'ALL' | RequestStatus;
 
 export type NotificationType =
     | 'REQUEST_APPROVED'
@@ -10,7 +15,12 @@ export type NotificationType =
     | 'NEW_LIKE'
     | 'NEW_COMMENT';
 
+export type NotificationFilter = 'ALL' | 'UNREAD' | NotificationType;
+
 export type MockReaction = 'like' | 'dislike' | null;
+
+export type MediaFilter = 'ALL' | MediaType;
+export type SortMode = 'RECENT' | 'POPULAR';
 
 export interface MockUser extends AuthUser {
     password: string;
@@ -53,6 +63,33 @@ export interface MockNotification {
     postId?: number | null;
     requestId?: number | null;
     createdAt: string;
+}
+
+export interface MockCursorResponse<T> {
+    items: T[];
+    nextCursor: string | null;
+    hasMore: boolean;
+    page: number;
+    totalPages: number;
+}
+
+export interface MockContentRequestsStats {
+    total: number;
+    pending: number;
+    approved: number;
+    rejected: number;
+    imagesCount: number;
+    videosCount: number;
+}
+
+export interface MockNotificationsStats {
+    total: number;
+    unread: number;
+    approved: number;
+    rejected: number;
+    likes: number;
+    comments: number;
+    social: number;
 }
 
 export const MOCK_STORAGE_KEYS = {
@@ -345,6 +382,60 @@ export function deleteMockUserNotifications(userId: number) {
     return updatedNotifications;
 }
 
+export function getMockNotificationsStats(userId: number): MockNotificationsStats {
+    const notifications = getMockNotifications().filter(
+        (notification) => notification.userId === userId
+    );
+
+    const likes = notifications.filter(
+        (notification) => notification.type === 'NEW_LIKE'
+    ).length;
+
+    const comments = notifications.filter(
+        (notification) => notification.type === 'NEW_COMMENT'
+    ).length;
+
+    return {
+        total: notifications.length,
+        unread: notifications.filter((notification) => !notification.isRead).length,
+        approved: notifications.filter(
+            (notification) => notification.type === 'REQUEST_APPROVED'
+        ).length,
+        rejected: notifications.filter(
+            (notification) => notification.type === 'REQUEST_REJECTED'
+        ).length,
+        likes,
+        comments,
+        social: likes + comments,
+    };
+}
+
+export function filterMockNotifications({
+                                            userId,
+                                            filter = 'ALL',
+                                        }: {
+    userId: number;
+    filter?: NotificationFilter;
+}) {
+    return getMockNotifications()
+        .filter((notification) => notification.userId === userId)
+        .filter((notification) => {
+            if (filter === 'ALL') {
+                return true;
+            }
+
+            if (filter === 'UNREAD') {
+                return !notification.isRead;
+            }
+
+            return notification.type === filter;
+        })
+        .sort(
+            (a, b) =>
+                new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+}
+
 export function getMockInteractions() {
     return readMockStorage<MockPostInteractions>(
         MOCK_STORAGE_KEYS.interactions,
@@ -582,7 +673,138 @@ export function syncMockContentRequestsAuthor({
     return updatedRequests;
 }
 
-export function createMockImageUrl(title: string, colorA = '#7c3aed', colorB = '#2563eb') {
+export function normalizeMockSearch(value?: string) {
+    return value?.trim().toLowerCase() || '';
+}
+
+export function buildMockCursorResponse<T extends { createdAt: string }>({
+                                                                             items,
+                                                                             cursor = null,
+                                                                             page,
+                                                                             limit = 10,
+                                                                         }: {
+    items: T[];
+    cursor?: string | null;
+    page?: number;
+    limit?: number;
+}): MockCursorResponse<T> {
+    const normalizedLimit = Math.max(limit, 1);
+
+    if (page) {
+        const normalizedPage = Math.max(page, 1);
+        const start = (normalizedPage - 1) * normalizedLimit;
+        const end = start + normalizedLimit;
+        const pageItems = items.slice(start, end);
+        const nextPageFirstItem = items[end];
+
+        return {
+            items: pageItems,
+            nextCursor: nextPageFirstItem?.createdAt || null,
+            hasMore: end < items.length,
+            page: normalizedPage,
+            totalPages: Math.max(Math.ceil(items.length / normalizedLimit), 1),
+        };
+    }
+
+    const cursorTime = cursor ? new Date(cursor).getTime() : null;
+
+    const availableItems = cursorTime
+        ? items.filter((item) => new Date(item.createdAt).getTime() < cursorTime)
+        : items;
+
+    const responseItems = availableItems.slice(0, normalizedLimit);
+    const nextItem = availableItems[normalizedLimit];
+
+    return {
+        items: responseItems,
+        nextCursor: nextItem?.createdAt || null,
+        hasMore: availableItems.length > normalizedLimit,
+        page: 1,
+        totalPages: Math.max(Math.ceil(items.length / normalizedLimit), 1),
+    };
+}
+
+export function filterMockContentRequests({
+                                              userId,
+                                              status = 'ALL',
+                                              mediaType = 'ALL',
+                                              search = '',
+                                          }: {
+    userId?: number;
+    status?: RequestStatusFilter;
+    mediaType?: MediaFilter;
+    search?: string;
+}) {
+    const normalizedSearch = normalizeMockSearch(search);
+
+    return getMockContentRequests()
+        .filter((request) => {
+            if (userId && request.userId !== userId) {
+                return false;
+            }
+
+            if (status !== 'ALL' && request.status !== status) {
+                return false;
+            }
+
+            if (mediaType !== 'ALL' && request.mediaType !== mediaType) {
+                return false;
+            }
+
+            if (!normalizedSearch) {
+                return true;
+            }
+
+            const title = request.title.toLowerCase();
+            const description = request.description.toLowerCase();
+            const fileName = request.fileName.toLowerCase();
+            const author = request.userNickname.toLowerCase();
+            const id = String(request.id);
+
+            return (
+                title.includes(normalizedSearch) ||
+                description.includes(normalizedSearch) ||
+                fileName.includes(normalizedSearch) ||
+                author.includes(normalizedSearch) ||
+                id.includes(normalizedSearch)
+            );
+        })
+        .sort(
+            (a, b) =>
+                new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+}
+
+export function getMockContentRequestsStats({
+                                                userId,
+                                            }: {
+    userId?: number;
+} = {}): MockContentRequestsStats {
+    const requests = getMockContentRequests().filter((request) => {
+        if (!userId) {
+            return true;
+        }
+
+        return request.userId === userId;
+    });
+
+    return {
+        total: requests.length,
+        pending: requests.filter((request) => request.status === 'PENDING').length,
+        approved: requests.filter((request) => request.status === 'APPROVED').length,
+        rejected: requests.filter((request) => request.status === 'REJECTED').length,
+        imagesCount: requests.filter((request) => request.mediaType === 'IMAGE')
+            .length,
+        videosCount: requests.filter((request) => request.mediaType === 'VIDEO')
+            .length,
+    };
+}
+
+export function createMockImageUrl(
+    title: string,
+    colorA = '#7c3aed',
+    colorB = '#2563eb'
+) {
     const svg = `
     <svg width="1200" height="900" viewBox="0 0 1200 900" fill="none" xmlns="http://www.w3.org/2000/svg">
       <rect width="1200" height="900" fill="#080A12"/>

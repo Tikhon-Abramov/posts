@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import styled from 'styled-components';
@@ -6,49 +6,33 @@ import {
     FiAlertCircle,
     FiArrowLeft,
     FiFileText,
+    FiLoader,
     FiLock,
     FiRefreshCw,
     FiStar,
 } from 'react-icons/fi';
 
 import type { RootState } from '../app/store';
-import type { Post } from '../entities/post/model/postTypes';
+import { useGetPostByIdQuery } from '../entities/post/api/postApi';
 import { PostCard } from '../entities/post/ui/PostCard';
-import {
-    applyMockUserStateToPost,
-    getMockPosts,
-} from '../shared/lib/mockStorage';
 
 export function PostDetailsPage() {
     const { postId } = useParams();
 
-    const { accessToken, user } = useSelector((state: RootState) => state.auth);
+    const { user } = useSelector((state: RootState) => state.auth);
 
-    const [posts, setPosts] = useState<Post[]>([]);
+    const postIdNumber = Number(postId);
+    const isValidPostId = Boolean(postId) && !Number.isNaN(postIdNumber);
 
-    const loadPosts = () => {
-        setPosts(getMockPosts());
-    };
-
-    useEffect(() => {
-        loadPosts();
-    }, []);
-
-    const post = useMemo(() => {
-        const id = Number(postId);
-
-        if (Number.isNaN(id)) {
-            return null;
-        }
-
-        const foundPost = posts.find((item) => item.id === id);
-
-        if (!foundPost) {
-            return null;
-        }
-
-        return applyMockUserStateToPost(foundPost, accessToken);
-    }, [accessToken, postId, posts]);
+    const {
+        data: post,
+        isLoading,
+        isFetching,
+        isError,
+        refetch,
+    } = useGetPostByIdQuery(postIdNumber, {
+        skip: !isValidPostId,
+    });
 
     const canViewPremiumPost = useMemo(() => {
         if (!post) {
@@ -70,7 +54,36 @@ export function PostDetailsPage() {
         return Boolean(user?.hasPremium);
     }, [post, user]);
 
-    if (!post) {
+    if (!isValidPostId) {
+        return (
+            <StateCard>
+                <FiAlertCircle />
+
+                <h1>Некорректный ID поста</h1>
+
+                <p>Ссылка на публикацию содержит неправильный идентификатор.</p>
+
+                <PrimaryLink to="/">
+                    <FiArrowLeft />
+                    Вернуться в ленту
+                </PrimaryLink>
+            </StateCard>
+        );
+    }
+
+    if (isLoading) {
+        return (
+            <StateCard>
+                <FiLoader />
+
+                <h1>Загружаем пост</h1>
+
+                <p>Сейчас откроем публикацию.</p>
+            </StateCard>
+        );
+    }
+
+    if (isError || !post) {
         return (
             <StateCard>
                 <FiAlertCircle />
@@ -82,10 +95,17 @@ export function PostDetailsPage() {
                     сброшены.
                 </p>
 
-                <PrimaryLink to="/">
-                    <FiArrowLeft />
-                    Вернуться в ленту
-                </PrimaryLink>
+                <Actions>
+                    <PrimaryButton type="button" onClick={() => refetch()}>
+                        <FiRefreshCw />
+                        Повторить
+                    </PrimaryButton>
+
+                    <SecondaryLink to="/">
+                        <FiArrowLeft />
+                        Вернуться в ленту
+                    </SecondaryLink>
+                </Actions>
             </StateCard>
         );
     }
@@ -126,8 +146,9 @@ export function PostDetailsPage() {
                     <Title>{post.title || 'Пост без названия'}</Title>
 
                     <Subtitle>
-                        Отдельная страница поста. Здесь удобно открывать публикацию из
-                        уведомлений, комментариев или личного профиля.
+                        Отдельная страница поста. Теперь публикация загружается через
+                        `useGetPostByIdQuery`, поэтому страницу будет легко подключить к
+                        backend endpoint `/posts/:postId`.
                     </Subtitle>
                 </HeroContent>
 
@@ -137,9 +158,9 @@ export function PostDetailsPage() {
                         В ленту
                     </BackLink>
 
-                    <RefreshButton type="button" onClick={loadPosts}>
+                    <RefreshButton type="button" disabled={isFetching} onClick={() => refetch()}>
                         <FiRefreshCw />
-                        Обновить
+                        {isFetching ? 'Обновляем...' : 'Обновить'}
                     </RefreshButton>
                 </HeroActions>
             </Hero>
@@ -286,8 +307,13 @@ const RefreshButton = styled.button`
     gap: 9px;
     font-weight: 900;
 
-    &:hover {
+    &:hover:not(:disabled) {
         background: rgba(255, 255, 255, 0.1);
+    }
+
+    &:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
     }
 `;
 
@@ -416,6 +442,23 @@ const Actions = styled.div`
     gap: 12px;
 `;
 
+const PrimaryButton = styled.button`
+    min-height: 48px;
+    padding: 0 18px;
+    border: none;
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: linear-gradient(135deg, #7c3aed, #2563eb);
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font-weight: 900;
+
+    &:hover {
+        filter: brightness(1.08);
+    }
+`;
+
 const PrimaryLink = styled(Link)`
     min-height: 48px;
     margin-top: 22px;
@@ -434,18 +477,18 @@ const PrimaryLink = styled(Link)`
 `;
 
 const SecondaryLink = styled(Link)`
-    min-height: 48px;
-    padding: 0 18px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(255, 255, 255, 0.06);
-    color: ${({ theme }) => theme.colors.text};
-    display: inline-flex;
-    align-items: center;
-    gap: 9px;
-    font-weight: 900;
+  min-height: 48px;
+  padding: 0 18px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: rgba(255, 255, 255, 0.06);
+  color: ${({ theme }) => theme.colors.text};
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 900;
 
-    &:hover {
-        background: rgba(255, 255, 255, 0.1);
-    }
+  &:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
 `;

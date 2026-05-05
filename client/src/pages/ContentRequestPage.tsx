@@ -1,4 +1,5 @@
-import { ChangeEvent, FormEvent, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import type {ChangeEvent, FormEvent} from 'react';
 import { useSelector } from 'react-redux';
 import styled from 'styled-components';
 import {
@@ -19,11 +20,7 @@ import type {
     MediaType,
     PostVisibility,
 } from '../entities/post/model/postTypes';
-import {
-    getMockContentRequests,
-    saveMockContentRequests,
-    type MockContentRequest,
-} from '../shared/lib/mockStorage';
+import { useCreateContentRequestMutation } from '../entities/content-request/api/contentRequestApi';
 
 type FormStatus = 'idle' | 'success' | 'error';
 
@@ -38,6 +35,9 @@ export function ContentRequestPage() {
 
     const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+    const [createContentRequest, { isLoading: isSubmitting }] =
+        useCreateContentRequestMutation();
+
     const [title, setTitle] = useState('');
     const [description, setDescription] = useState('');
     const [suggestedVisibility, setSuggestedVisibility] =
@@ -50,11 +50,12 @@ export function ContentRequestPage() {
 
     const canSubmit = useMemo(() => {
         return (
+            Boolean(user) &&
             title.trim().length >= 3 &&
-            description.trim().length >= 10 &&
-            Boolean(selectedFile)
+            Boolean(selectedFile) &&
+            !isSubmitting
         );
-    }, [description, selectedFile, title]);
+    }, [isSubmitting, selectedFile, title, user]);
 
     const handlePickFile = () => {
         fileInputRef.current?.click();
@@ -144,7 +145,7 @@ export function ContentRequestPage() {
         }
     };
 
-    const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
         event.preventDefault();
 
         setStatus('idle');
@@ -162,45 +163,30 @@ export function ContentRequestPage() {
             return;
         }
 
-        if (description.trim().length < 10) {
-            setStatus('error');
-            setMessage('Описание должно содержать минимум 10 символов.');
-            return;
-        }
-
         if (!selectedFile) {
             setStatus('error');
             setMessage('Выберите фото или видео для публикации.');
             return;
         }
 
-        const currentRequests = getMockContentRequests();
+        try {
+            await createContentRequest({
+                title: title.trim(),
+                description: description.trim() || '',
+                suggestedVisibility,
+                file: selectedFile.file,
+            }).unwrap();
 
-        const newRequest: MockContentRequest = {
-            id: Date.now(),
-            userId: user.id,
-            userNickname: user.nickname,
-            title: title.trim(),
-            description: description.trim(),
-            suggestedVisibility,
-            mediaType: selectedFile.mediaType,
-            fileName: selectedFile.file.name,
-            fileSize: selectedFile.file.size,
-            previewUrl: selectedFile.previewUrl,
-            status: 'PENDING',
-            createdAt: new Date().toISOString(),
-            reviewedAt: null,
-            publishedPostId: null,
-        };
+            setStatus('success');
+            setMessage(
+                'Заявка отправлена админу. После проверки вы получите уведомление.'
+            );
 
-        saveMockContentRequests([newRequest, ...currentRequests]);
-
-        setStatus('success');
-        setMessage(
-            'Заявка отправлена админу. После проверки вы получите уведомление.'
-        );
-
-        resetForm();
+            resetForm();
+        } catch (error) {
+            setStatus('error');
+            setMessage(getErrorMessage(error, 'Не удалось отправить заявку.'));
+        }
     };
 
     return (
@@ -245,7 +231,7 @@ export function ContentRequestPage() {
                         <Textarea
                             id="request-description"
                             value={description}
-                            placeholder="Опишите, что изображено на фото или видео..."
+                            placeholder="Описание можно оставить пустым..."
                             maxLength={900}
                             onChange={(event) => setDescription(event.target.value)}
                         />
@@ -302,9 +288,8 @@ export function ContentRequestPage() {
                                 <strong>Выберите файл</strong>
 
                                 <span>
-                  Фото до 8 MB или видео до 40 MB. Для mock-режима фото
-                  сохраняется как preview, а видео отображается как заявка с
-                  названием файла.
+                  Фото до 8 MB или видео до 40 MB. Файл отправится на backend
+                  через FormData в поле media.
                 </span>
                             </UploadZone>
                         ) : (
@@ -353,7 +338,7 @@ export function ContentRequestPage() {
 
                     <SubmitButton type="submit" disabled={!canSubmit}>
                         <FiSend />
-                        Отправить заявку
+                        {isSubmitting ? 'Отправляем...' : 'Отправить заявку'}
                     </SubmitButton>
                 </FormCard>
 
@@ -371,12 +356,12 @@ export function ContentRequestPage() {
 
                             <Step>
                                 <strong>2</strong>
-                                <span>Заявка попадает в админ-панель.</span>
+                                <span>Файл и данные заявки отправляются на backend.</span>
                             </Step>
 
                             <Step>
                                 <strong>3</strong>
-                                <span>Админ публикует материал или отклоняет его.</span>
+                                <span>Заявка попадает в админ-панель.</span>
                             </Step>
 
                             <Step>
@@ -392,15 +377,27 @@ export function ContentRequestPage() {
                         <h2>Важно</h2>
 
                         <Text>
-                            Сейчас это временный frontend mock. Данные сохраняются в
-                            localStorage. Когда подключим backend, эта форма будет отправлять
-                            файл на сервер через API.
+                            Описание необязательное. Для отправки нужны только название
+                            минимум 3 символа и выбранный файл.
                         </Text>
                     </InfoCard>
                 </SidePanel>
             </ContentGrid>
         </Page>
     );
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+    if (
+        typeof error === 'object' &&
+        error !== null &&
+        'data' in error &&
+        typeof (error as { data?: { message?: unknown } }).data?.message === 'string'
+    ) {
+        return (error as { data: { message: string } }).data.message;
+    }
+
+    return fallback;
 }
 
 function formatFileSize(size: number) {

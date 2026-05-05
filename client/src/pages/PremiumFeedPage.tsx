@@ -1,36 +1,48 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import styled from 'styled-components';
 import {
     FiAlertCircle,
     FiFilter,
-    FiImage,
+    FiLoader,
     FiLock,
     FiLogIn,
-    FiRefreshCw,
     FiSearch,
     FiStar,
-    FiVideo,
     FiZap,
 } from 'react-icons/fi';
 
 import type { AppDispatch, RootState } from '../app/store';
 import { openAuthModal } from '../entities/auth/slice/authSlice';
-import { useGetFeedQuery } from '../entities/post/api/postApi';
+import {
+    useGetFeedQuery,
+    useGetLatestFeedPostsQuery,
+} from '../entities/post/api/postApi';
+import type { MediaType, Post } from '../entities/post/model/postTypes';
 import { PostGrid } from '../entities/post/ui/PostGrid';
 
-type MediaFilter = 'ALL' | 'IMAGE' | 'VIDEO';
+type MediaFilter = 'ALL' | MediaType;
 type SortMode = 'RECENT' | 'POPULAR';
+
+const FEED_LIMIT = 10;
+const POLLING_INTERVAL = 8000;
 
 export function PremiumFeedPage() {
     const dispatch = useDispatch<AppDispatch>();
+
+    const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
     const { accessToken, user } = useSelector((state: RootState) => state.auth);
 
     const [searchQuery, setSearchQuery] = useState('');
     const [mediaFilter, setMediaFilter] = useState<MediaFilter>('ALL');
     const [sortMode, setSortMode] = useState<SortMode>('RECENT');
+
+    const [cursor, setCursor] = useState<string | null>(null);
+    const [loadedPosts, setLoadedPosts] = useState<Post[]>([]);
+    const [nextCursor, setNextCursor] = useState<string | null>(null);
+    const [hasMore, setHasMore] = useState(true);
 
     const isAuth = Boolean(accessToken);
     const isSessionChecking = isAuth && !user;
@@ -45,50 +57,105 @@ export function PremiumFeedPage() {
     } = useGetFeedQuery(
         {
             type: 'premium',
-            page: 1,
-            limit: 50,
+            cursor,
+            limit: FEED_LIMIT,
+            search: searchQuery,
+            mediaType: mediaFilter,
+            sort: sortMode,
         },
         {
             skip: !hasPremium,
         }
     );
 
-    const posts = data?.posts || [];
+    const latestAfter = loadedPosts[0]?.createdAt || null;
 
-    const filteredPosts = useMemo(() => {
-        const normalizedQuery = searchQuery.trim().toLowerCase();
+    const { data: latestData } = useGetLatestFeedPostsQuery(
+        {
+            type: 'premium',
+            after: latestAfter,
+            search: searchQuery,
+            mediaType: mediaFilter,
+        },
+        {
+            skip: !hasPremium || !latestAfter || sortMode !== 'RECENT',
+            pollingInterval: POLLING_INTERVAL,
+        }
+    );
 
-        return posts
-            .filter((post) => {
-                if (mediaFilter !== 'ALL' && post.media[0]?.type !== mediaFilter) {
-                    return false;
+    const isFirstLoading = isLoading && loadedPosts.length === 0;
+    const isLoadingMore = isFetching && loadedPosts.length > 0;
+
+    useEffect(() => {
+        const items = data?.items || data?.posts || [];
+
+        if (!data) {
+            return;
+        }
+
+        setLoadedPosts((currentPosts) => {
+            if (!cursor) {
+                return mergePostsKeepingOrder(items, currentPosts);
+            }
+
+            return mergePostsKeepingOrder(currentPosts, items);
+        });
+
+        setNextCursor(data.nextCursor);
+        setHasMore(data.hasMore);
+    }, [cursor, data]);
+
+    useEffect(() => {
+        const latestItems = latestData?.items || [];
+
+        if (!latestItems.length) {
+            return;
+        }
+
+        setLoadedPosts((currentPosts) =>
+            mergePostsKeepingOrder(latestItems, currentPosts)
+        );
+    }, [latestData]);
+
+    useEffect(() => {
+        setCursor(null);
+        setLoadedPosts([]);
+        setNextCursor(null);
+        setHasMore(true);
+    }, [mediaFilter, searchQuery, sortMode]);
+
+    useEffect(() => {
+        const target = loadMoreRef.current;
+
+        if (!target) {
+            return;
+        }
+
+        const observer = new IntersectionObserver(
+            ([entry]) => {
+                if (!entry.isIntersecting) {
+                    return;
                 }
 
-                if (!normalizedQuery) {
-                    return true;
+                if (!hasMore || isFetching || !nextCursor) {
+                    return;
                 }
 
-                const title = post.title?.toLowerCase() || '';
-                const description = post.description?.toLowerCase() || '';
-                const author = post.author.nickname.toLowerCase();
+                setCursor(nextCursor);
+            },
+            {
+                root: null,
+                rootMargin: '700px 0px',
+                threshold: 0,
+            }
+        );
 
-                return (
-                    title.includes(normalizedQuery) ||
-                    description.includes(normalizedQuery) ||
-                    author.includes(normalizedQuery)
-                );
-            })
-            .sort((a, b) => {
-                if (sortMode === 'POPULAR') {
-                    const aScore = a.likesCount + a.commentsCount - a.dislikesCount;
-                    const bScore = b.likesCount + b.commentsCount - b.dislikesCount;
+        observer.observe(target);
 
-                    return bScore - aScore;
-                }
-
-                return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-            });
-    }, [mediaFilter, posts, searchQuery, sortMode]);
+        return () => {
+            observer.disconnect();
+        };
+    }, [hasMore, isFetching, nextCursor]);
 
     const resetFilters = () => {
         setSearchQuery('');
@@ -168,7 +235,7 @@ export function PremiumFeedPage() {
     if (isSessionChecking) {
         return (
             <StateCard>
-                <FiRefreshCw />
+                <FiLoader />
                 <h1>Проверяем сессию</h1>
                 <p>Сейчас подтвердим аккаунт и доступ к премиум-разделу.</p>
             </StateCard>
@@ -185,7 +252,7 @@ export function PremiumFeedPage() {
 
                     <Eyebrow>Нужна подписка</Eyebrow>
 
-                    <Title>Открой премиум-ленту</Title>
+                    <Title>Открой Premium</Title>
 
                     <Subtitle>
                         Ваш аккаунт авторизован, но активной подписки пока нет. Оформите
@@ -217,7 +284,7 @@ export function PremiumFeedPage() {
         );
     }
 
-    if (isLoading) {
+    if (isFirstLoading) {
         return (
             <StateCard>
                 <FiStar />
@@ -227,15 +294,14 @@ export function PremiumFeedPage() {
         );
     }
 
-    if (isError) {
+    if (isError && !loadedPosts.length) {
         return (
             <StateCard>
                 <FiAlertCircle />
                 <h1>Не удалось загрузить Premium</h1>
-                <p>Проверьте подключение или попробуйте обновить закрытую ленту.</p>
+                <p>Проверьте подключение или попробуйте повторить загрузку.</p>
 
                 <PrimaryButton type="button" onClick={() => refetch()}>
-                    <FiRefreshCw />
                     Повторить
                 </PrimaryButton>
             </StateCard>
@@ -251,8 +317,9 @@ export function PremiumFeedPage() {
                     <Title>Закрытая лента</Title>
 
                     <Subtitle>
-                        Эксклюзивные фото и видео доступны только пользователям с активной
-                        подпиской. Используйте поиск, чтобы быстро найти нужный Premium-пост.
+                        Premium-публикации подгружаются частями при прокрутке. Новые посты
+                        проверяются автоматически и появляются сверху без перезагрузки
+                        страницы.
                     </Subtitle>
                 </HeroContent>
 
@@ -261,36 +328,6 @@ export function PremiumFeedPage() {
                     Active
                 </HeroBadge>
             </Hero>
-
-            <StatsGrid>
-                <StatCard>
-                    <FiImage />
-                    <div>
-                        <strong>
-                            {filteredPosts.filter((post) => post.media[0]?.type === 'IMAGE').length}
-                        </strong>
-                        <span>Фото</span>
-                    </div>
-                </StatCard>
-
-                <StatCard>
-                    <FiVideo />
-                    <div>
-                        <strong>
-                            {filteredPosts.filter((post) => post.media[0]?.type === 'VIDEO').length}
-                        </strong>
-                        <span>Видео</span>
-                    </div>
-                </StatCard>
-
-                <StatCard>
-                    <FiStar />
-                    <div>
-                        <strong>{filteredPosts.length}</strong>
-                        <span>Найдено</span>
-                    </div>
-                </StatCard>
-            </StatsGrid>
 
             <Toolbar>
                 <SearchBox>
@@ -323,30 +360,45 @@ export function PremiumFeedPage() {
                     </FilterSelect>
                 </Filters>
 
-                <ToolbarActions>
-                    <ResetButton type="button" onClick={resetFilters}>
-                        <FiFilter />
-                        Сбросить
-                    </ResetButton>
-
-                    <RefreshButton
-                        type="button"
-                        disabled={isFetching}
-                        onClick={() => refetch()}
-                    >
-                        <FiRefreshCw />
-                        {isFetching ? 'Обновляем...' : 'Обновить'}
-                    </RefreshButton>
-                </ToolbarActions>
+                <ResetButton type="button" onClick={resetFilters}>
+                    <FiFilter />
+                    Сбросить
+                </ResetButton>
             </Toolbar>
 
-            {filteredPosts.length ? (
-                <PostGrid posts={filteredPosts} />
-            ) : posts.length ? (
+            {loadedPosts.length ? (
+                <>
+                    <FeedMeta>
+                        <span>Лента обновляется автоматически</span>
+
+                        {isLoadingMore && (
+                            <LoadingInline>
+                                <FiLoader />
+                                Подгружаем еще...
+                            </LoadingInline>
+                        )}
+                    </FeedMeta>
+
+                    <PostGrid posts={loadedPosts} />
+
+                    <LoadMoreAnchor ref={loadMoreRef}>
+                        {hasMore ? (
+                            <LoadingMore>
+                                <FiLoader />
+                                <span>Листайте ниже — Premium-посты подгрузятся автоматически</span>
+                            </LoadingMore>
+                        ) : (
+                            <EndMessage>
+                                Вы посмотрели все Premium-посты по текущим фильтрам
+                            </EndMessage>
+                        )}
+                    </LoadMoreAnchor>
+                </>
+            ) : (
                 <EmptyCard>
                     <FiSearch />
 
-                    <h2>По фильтрам ничего не найдено</h2>
+                    <h2>Premium-постов не найдено</h2>
 
                     <p>
                         Попробуйте изменить поисковую фразу, выбрать другой тип медиа или
@@ -357,24 +409,19 @@ export function PremiumFeedPage() {
                         Сбросить фильтры
                     </EmptyButton>
                 </EmptyCard>
-            ) : (
-                <EmptyCard>
-                    <FiStar />
-
-                    <h2>Premium-постов пока нет</h2>
-
-                    <p>
-                        Создайте Premium-пост в админке или примите пользовательскую заявку
-                        в закрытую ленту, и публикации появятся здесь.
-                    </p>
-
-                    <AdminHintLink to="/admin/posts/create">
-                        Создать Premium-пост
-                    </AdminHintLink>
-                </EmptyCard>
             )}
         </Page>
     );
+}
+
+function mergePostsKeepingOrder(first: Post[], second: Post[]) {
+    const map = new Map<number, Post>();
+
+    [...first, ...second].forEach((post) => {
+        map.set(post.id, post);
+    });
+
+    return Array.from(map.values());
 }
 
 const Page = styled.div`
@@ -402,23 +449,23 @@ const Hero = styled.section`
 `;
 
 const HeroContent = styled.div`
-  min-width: 0;
+    min-width: 0;
 `;
 
 const Eyebrow = styled.div`
-  margin-bottom: 8px;
-  color: #ec4899;
-  font-size: 13px;
-  font-weight: 900;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+    margin-bottom: 8px;
+    color: #ec4899;
+    font-size: 13px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
 `;
 
 const Title = styled.h1`
-  margin: 0;
-  font-size: clamp(30px, 5vw, 52px);
-  line-height: 0.96;
-  letter-spacing: -0.075em;
+    margin: 0;
+    font-size: clamp(30px, 5vw, 52px);
+    line-height: 0.96;
+    letter-spacing: -0.075em;
 `;
 
 const Subtitle = styled.p`
@@ -440,53 +487,6 @@ const HeroBadge = styled.div`
     align-items: center;
     gap: 8px;
     font-weight: 900;
-`;
-
-const StatsGrid = styled.div`
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 14px;
-
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        grid-template-columns: 1fr;
-    }
-`;
-
-const StatCard = styled.article`
-    padding: 16px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.lg};
-    background: rgba(21, 25, 43, 0.78);
-    display: flex;
-    align-items: center;
-    gap: 13px;
-
-    > svg {
-        width: 46px;
-        height: 46px;
-        padding: 12px;
-        border-radius: 17px;
-        background: rgba(236, 72, 153, 0.13);
-        color: #f9a8d4;
-    }
-
-    div {
-        min-width: 0;
-        display: grid;
-        gap: 2px;
-    }
-
-    strong {
-        font-size: 28px;
-        line-height: 1;
-        letter-spacing: -0.05em;
-    }
-
-    span {
-        color: ${({ theme }) => theme.colors.textMuted};
-        font-size: 13px;
-        font-weight: 800;
-    }
 `;
 
 const Toolbar = styled.div`
@@ -569,41 +569,6 @@ const FilterSelect = styled.select`
     }
 `;
 
-const ToolbarActions = styled.div`
-    display: flex;
-    gap: 8px;
-
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        display: grid;
-        grid-template-columns: 1fr;
-    }
-`;
-
-const RefreshButton = styled.button`
-    flex: 0 0 auto;
-    min-height: 46px;
-    padding: 0 16px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(255, 255, 255, 0.055);
-    color: ${({ theme }) => theme.colors.text};
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 9px;
-    font-weight: 900;
-
-    &:hover:not(:disabled) {
-        background: rgba(255, 255, 255, 0.09);
-        border-color: rgba(236, 72, 153, 0.45);
-    }
-
-    &:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-    }
-`;
-
 const ResetButton = styled.button`
     min-height: 46px;
     padding: 0 16px;
@@ -621,6 +586,75 @@ const ResetButton = styled.button`
         background: rgba(255, 255, 255, 0.09);
         border-color: rgba(236, 72, 153, 0.45);
     }
+`;
+
+const FeedMeta = styled.div`
+    padding: 0 4px;
+    color: ${({ theme }) => theme.colors.textMuted};
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 13px;
+    font-weight: 800;
+
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+`;
+
+const LoadingInline = styled.div`
+    color: #f9a8d4;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+
+    svg {
+        animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+        to {
+            transform: rotate(360deg);
+        }
+    }
+`;
+
+const LoadMoreAnchor = styled.div`
+    min-height: 80px;
+    display: grid;
+    place-items: center;
+`;
+
+const LoadingMore = styled.div`
+    padding: 12px 16px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: rgba(255, 255, 255, 0.045);
+    color: ${({ theme }) => theme.colors.textMuted};
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 13px;
+    font-weight: 900;
+
+    svg {
+        color: #f9a8d4;
+        animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+        to {
+            transform: rotate(360deg);
+        }
+    }
+`;
+
+const EndMessage = styled.div`
+    color: ${({ theme }) => theme.colors.textMuted};
+    font-size: 13px;
+    font-weight: 800;
 `;
 
 const Paywall = styled.section`
@@ -787,23 +821,6 @@ const EmptyButton = styled.button`
     border-radius: ${({ theme }) => theme.radius.full};
     background: linear-gradient(135deg, #7c3aed, #ec4899);
     color: white;
-    font-weight: 900;
-
-    &:hover {
-        filter: brightness(1.08);
-    }
-`;
-
-const AdminHintLink = styled(Link)`
-    min-height: 48px;
-    margin-top: 22px;
-    padding: 0 18px;
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: linear-gradient(135deg, #7c3aed, #ec4899);
-    color: white;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
     font-weight: 900;
 
     &:hover {

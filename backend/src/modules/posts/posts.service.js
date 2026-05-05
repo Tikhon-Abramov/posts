@@ -1,0 +1,822 @@
+const { pool } = require('../../config/db');
+const ApiError = require('../../utils/ApiError');
+
+const DEFAULT_LIMIT = 10;
+const MAX_LIMIT = 30;
+
+function parseId(value, fieldName = 'id') {
+    const id = Number(value);
+
+    if (!Number.isInteger(id) || id <= 0) {
+        throw ApiError.badRequest(`Некорректный ${fieldName}.`);
+    }
+
+    return id;
+}
+
+function parseLimit(value) {
+    const limit = Number(value) || DEFAULT_LIMIT;
+
+    return Math.min(Math.max(limit, 1), MAX_LIMIT);
+}
+
+function getViewerId(viewer) {
+    if (!viewer?.id) {
+        return null;
+    }
+
+    const viewerId = Number(viewer.id);
+
+    if (!Number.isInteger(viewerId) || viewerId <= 0) {
+        return null;
+    }
+
+    return viewerId;
+}
+
+function normalizeSearch(value) {
+    return String(value || '').trim();
+}
+
+function normalizeMediaType(value) {
+    if (value === 'IMAGE' || value === 'VIDEO') {
+        return value;
+    }
+
+    return 'ALL';
+}
+
+function normalizeSort(value) {
+    if (value === 'POPULAR') {
+        return 'POPULAR';
+    }
+
+    return 'RECENT';
+}
+
+function canViewPremiumPost(viewer, post) {
+    if (post.visibility !== 'PREMIUM') {
+        return true;
+    }
+
+    if (!viewer) {
+        return false;
+    }
+
+    if (viewer.role === 'ADMIN') {
+        return true;
+    }
+
+    if (Number(viewer.id) === Number(post.authorId)) {
+        return true;
+    }
+
+    return Boolean(viewer.hasPremium);
+}
+
+function assertCanViewPost(viewer, post) {
+    if (post.visibility !== 'PREMIUM') {
+        return;
+    }
+
+    if (!viewer) {
+        throw ApiError.unauthorized('Для просмотра Premium-публикации нужно войти.');
+    }
+
+    if (!canViewPremiumPost(viewer, post)) {
+        throw ApiError.forbidden('Для просмотра Premium-публикации нужна подписка.');
+    }
+}
+
+function assertCanViewPremiumFeed(viewer) {
+    if (!viewer) {
+        throw ApiError.unauthorized('Для просмотра Premium-ленты нужно войти.');
+    }
+
+    if (viewer.role === 'ADMIN') {
+        return;
+    }
+
+    if (viewer.hasPremium) {
+        return;
+    }
+
+    throw ApiError.forbidden('Для просмотра Premium-ленты нужна подписка.');
+}
+
+function toIsoDate(value) {
+    if (!value) {
+        return null;
+    }
+
+    if (value instanceof Date) {
+        return value.toISOString();
+    }
+
+    return new Date(value).toISOString();
+}
+
+function mapPostRow(row) {
+    return {
+        id: Number(row.id),
+        title: row.title,
+        description: row.description || '',
+        visibility: row.visibility,
+        media: row.media_id
+            ? [
+                {
+                    id: Number(row.media_id),
+                    type: row.media_type,
+                    url: row.media_url,
+                },
+            ]
+            : [],
+        author: {
+            id: Number(row.author_id),
+            nickname: row.author_nickname,
+            avatarUrl: row.author_avatar_url || null,
+        },
+        likesCount: Number(row.likes_count || 0),
+        dislikesCount: Number(row.dislikes_count || 0),
+        commentsCount: Number(row.comments_count || 0),
+        isLikedByMe: Boolean(row.is_liked_by_me),
+        isDislikedByMe: Boolean(row.is_disliked_by_me),
+        isSavedByMe: Boolean(row.is_saved_by_me),
+        createdAt: toIsoDate(row.created_at),
+    };
+}
+
+function mapPostAccessRow(row) {
+    return {
+        id: Number(row.id),
+        authorId: Number(row.author_id),
+        visibility: row.visibility,
+    };
+}
+
+function getOrderBy(sort) {
+    if (sort === 'POPULAR') {
+        return `
+      ORDER BY
+        (likes_count + comments_count - dislikes_count) DESC,
+        p.created_at DESC,
+        p.id DESC
+    `;
+    }
+
+    return `
+    ORDER BY
+      p.created_at DESC,
+      p.id DESC
+  `;
+}
+
+function buildSearchCondition({ search, params }) {
+    const normalizedSearch = normalizeSearch(search);
+
+    if (!normalizedSearch) {
+        return '';
+    }
+
+    params.searchLike = `%${normalizedSearch}%`;
+
+    return `
+    AND (
+      p.title LIKE :searchLike
+      OR p.description LIKE :searchLike
+      OR u.nickname LIKE :searchLike
+      OR CAST(p.id AS CHAR) LIKE :searchLike
+    )
+  `;
+}
+
+function buildMediaCondition({ mediaType, params }) {
+    const normalizedMediaType = normalizeMediaType(mediaType);
+
+    if (normalizedMediaType === 'ALL') {
+        return '';
+    }
+
+    params.mediaType = normalizedMediaType;
+
+    return 'AND pm.type = :mediaType';
+}
+
+function buildCursorCondition({ cursor, params }) {
+    if (!cursor) {
+        return '';
+    }
+
+    const cursorDate = new Date(cursor);
+
+    if (Number.isNaN(cursorDate.getTime())) {
+        return '';
+    }
+
+    params.cursorDate = cursorDate;
+
+    return 'AND p.created_at < :cursorDate';
+}
+
+function buildAfterCondition({ after, params }) {
+    if (!after) {
+        return '';
+    }
+
+    const afterDate = new Date(after);
+
+    if (Number.isNaN(afterDate.getTime())) {
+        return '';
+    }
+
+    params.afterDate = afterDate;
+
+    return 'AND p.created_at > :afterDate';
+}
+
+function buildPostsSelect({ viewerId }) {
+    const isLikedByMeSql = viewerId
+        ? `
+      EXISTS(
+        SELECT 1
+        FROM post_reactions pr_me_like
+        WHERE pr_me_like.post_id = p.id
+          AND pr_me_like.user_id = ${viewerId}
+          AND pr_me_like.type = 'LIKE'
+      )
+    `
+        : 'FALSE';
+
+    const isDislikedByMeSql = viewerId
+        ? `
+      EXISTS(
+        SELECT 1
+        FROM post_reactions pr_me_dislike
+        WHERE pr_me_dislike.post_id = p.id
+          AND pr_me_dislike.user_id = ${viewerId}
+          AND pr_me_dislike.type = 'DISLIKE'
+      )
+    `
+        : 'FALSE';
+
+    const isSavedByMeSql = viewerId
+        ? `
+      EXISTS(
+        SELECT 1
+        FROM saved_posts sp_me
+        WHERE sp_me.post_id = p.id
+          AND sp_me.user_id = ${viewerId}
+      )
+    `
+        : 'FALSE';
+
+    return `
+    SELECT
+      p.id,
+      p.title,
+      p.description,
+      p.visibility,
+      p.created_at,
+      u.id AS author_id,
+      u.nickname AS author_nickname,
+      u.avatar_url AS author_avatar_url,
+      pm.id AS media_id,
+      pm.type AS media_type,
+      pm.url AS media_url,
+
+      (
+        SELECT COUNT(*)
+        FROM post_reactions pr_like
+        WHERE pr_like.post_id = p.id
+          AND pr_like.type = 'LIKE'
+      ) AS likes_count,
+
+      (
+        SELECT COUNT(*)
+        FROM post_reactions pr_dislike
+        WHERE pr_dislike.post_id = p.id
+          AND pr_dislike.type = 'DISLIKE'
+      ) AS dislikes_count,
+
+      (
+        SELECT COUNT(*)
+        FROM comments c
+        WHERE c.post_id = p.id
+          AND c.deleted_at IS NULL
+      ) AS comments_count,
+
+      ${isLikedByMeSql} AS is_liked_by_me,
+      ${isDislikedByMeSql} AS is_disliked_by_me,
+      ${isSavedByMeSql} AS is_saved_by_me
+
+    FROM posts p
+    INNER JOIN users u ON u.id = p.author_id
+    LEFT JOIN post_media pm ON pm.post_id = p.id
+  `;
+}
+
+async function getPostAccessById(postId) {
+    const [rows] = await pool.execute(
+        `
+      SELECT
+        id,
+        author_id,
+        visibility
+      FROM posts
+      WHERE id = :postId
+        AND deleted_at IS NULL
+      LIMIT 1
+    `,
+        {
+            postId,
+        }
+    );
+
+    return rows[0] ? mapPostAccessRow(rows[0]) : null;
+}
+
+async function getPostById({ viewer, postId }) {
+    const normalizedPostId = parseId(postId, 'postId');
+    const viewerId = getViewerId(viewer);
+
+    const [rows] = await pool.execute(
+        `
+      ${buildPostsSelect({ viewerId })}
+      WHERE p.id = :postId
+        AND p.deleted_at IS NULL
+      LIMIT 1
+    `,
+        {
+            postId: normalizedPostId,
+        }
+    );
+
+    if (!rows[0]) {
+        throw ApiError.notFound('Пост не найден.');
+    }
+
+    const post = mapPostRow(rows[0]);
+
+    assertCanViewPost(viewer, {
+        id: post.id,
+        authorId: post.author.id,
+        visibility: post.visibility,
+    });
+
+    return post;
+}
+
+async function getFeed({ viewer, type, query }) {
+    if (type === 'premium') {
+        assertCanViewPremiumFeed(viewer);
+    }
+
+    const viewerId = getViewerId(viewer);
+    const limit = parseLimit(query.limit);
+    const sqlLimit = limit + 1;
+    const sort = normalizeSort(query.sort);
+
+    const params = {
+        visibility: type === 'premium' ? 'PREMIUM' : 'PUBLIC',
+    };
+
+    const searchCondition = buildSearchCondition({
+        search: query.search,
+        params,
+    });
+
+    const mediaCondition = buildMediaCondition({
+        mediaType: query.mediaType,
+        params,
+    });
+
+    const cursorCondition = buildCursorCondition({
+        cursor: query.cursor,
+        params,
+    });
+
+    const [rows] = await pool.execute(
+        `
+      ${buildPostsSelect({ viewerId })}
+      WHERE p.deleted_at IS NULL
+        AND p.visibility = :visibility
+        ${searchCondition}
+        ${mediaCondition}
+        ${cursorCondition}
+      ${getOrderBy(sort)}
+      LIMIT ${sqlLimit}
+    `,
+        params
+    );
+
+    return buildCursorResponse(rows, limit);
+}
+
+async function getLatestFeedPosts({ viewer, type, query }) {
+    if (type === 'premium') {
+        assertCanViewPremiumFeed(viewer);
+    }
+
+    const viewerId = getViewerId(viewer);
+    const sqlLimit = 20;
+
+    const params = {
+        visibility: type === 'premium' ? 'PREMIUM' : 'PUBLIC',
+    };
+
+    const searchCondition = buildSearchCondition({
+        search: query.search,
+        params,
+    });
+
+    const mediaCondition = buildMediaCondition({
+        mediaType: query.mediaType,
+        params,
+    });
+
+    const afterCondition = buildAfterCondition({
+        after: query.after,
+        params,
+    });
+
+    const [rows] = await pool.execute(
+        `
+      ${buildPostsSelect({ viewerId })}
+      WHERE p.deleted_at IS NULL
+        AND p.visibility = :visibility
+        ${searchCondition}
+        ${mediaCondition}
+        ${afterCondition}
+      ORDER BY p.created_at DESC, p.id DESC
+      LIMIT ${sqlLimit}
+    `,
+        params
+    );
+
+    const items = rows.map(mapPostRow);
+
+    return {
+        items,
+        hasNew: items.length > 0,
+    };
+}
+
+async function getSavedPosts({ viewer, query }) {
+    const viewerId = getViewerId(viewer);
+    const limit = parseLimit(query.limit);
+    const sqlLimit = limit + 1;
+    const sort = normalizeSort(query.sort);
+
+    const params = {
+        viewerId,
+    };
+
+    const searchCondition = buildSearchCondition({
+        search: query.search,
+        params,
+    });
+
+    const mediaCondition = buildMediaCondition({
+        mediaType: query.mediaType,
+        params,
+    });
+
+    const cursorCondition = buildCursorCondition({
+        cursor: query.cursor,
+        params,
+    });
+
+    const [rows] = await pool.execute(
+        `
+      ${buildPostsSelect({ viewerId })}
+      INNER JOIN saved_posts sp ON sp.post_id = p.id
+      WHERE p.deleted_at IS NULL
+        AND sp.user_id = :viewerId
+        ${searchCondition}
+        ${mediaCondition}
+        ${cursorCondition}
+      ${getOrderBy(sort)}
+      LIMIT ${sqlLimit}
+    `,
+        params
+    );
+
+    return buildCursorResponse(rows, limit);
+}
+
+async function getSavedPostsStats(userId) {
+    const [rows] = await pool.execute(
+        `
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN pm.type = 'IMAGE' THEN 1 ELSE 0 END) AS images_count,
+        SUM(CASE WHEN pm.type = 'VIDEO' THEN 1 ELSE 0 END) AS videos_count
+      FROM saved_posts sp
+      INNER JOIN posts p ON p.id = sp.post_id
+      LEFT JOIN post_media pm ON pm.post_id = p.id
+      WHERE sp.user_id = :userId
+        AND p.deleted_at IS NULL
+    `,
+        {
+            userId,
+        }
+    );
+
+    const row = rows[0] || {};
+
+    return {
+        total: Number(row.total || 0),
+        imagesCount: Number(row.images_count || 0),
+        videosCount: Number(row.videos_count || 0),
+    };
+}
+
+async function getMyPosts({ viewer, query }) {
+    const viewerId = getViewerId(viewer);
+    const limit = parseLimit(query.limit);
+    const sqlLimit = limit + 1;
+    const sort = normalizeSort(query.sort);
+
+    const params = {
+        viewerId,
+    };
+
+    const searchCondition = buildSearchCondition({
+        search: query.search,
+        params,
+    });
+
+    const mediaCondition = buildMediaCondition({
+        mediaType: query.mediaType,
+        params,
+    });
+
+    const cursorCondition = buildCursorCondition({
+        cursor: query.cursor,
+        params,
+    });
+
+    const [rows] = await pool.execute(
+        `
+      ${buildPostsSelect({ viewerId })}
+      WHERE p.deleted_at IS NULL
+        AND p.author_id = :viewerId
+        ${searchCondition}
+        ${mediaCondition}
+        ${cursorCondition}
+      ${getOrderBy(sort)}
+      LIMIT ${sqlLimit}
+    `,
+        params
+    );
+
+    return buildCursorResponse(rows, limit);
+}
+
+async function getMyPostsStats(userId) {
+    const [rows] = await pool.execute(
+        `
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN p.visibility = 'PUBLIC' THEN 1 ELSE 0 END) AS public_posts,
+        SUM(CASE WHEN p.visibility = 'PREMIUM' THEN 1 ELSE 0 END) AS premium_posts,
+        SUM(CASE WHEN pm.type = 'IMAGE' THEN 1 ELSE 0 END) AS images_count,
+        SUM(CASE WHEN pm.type = 'VIDEO' THEN 1 ELSE 0 END) AS videos_count
+      FROM posts p
+      LEFT JOIN post_media pm ON pm.post_id = p.id
+      WHERE p.author_id = :userId
+        AND p.deleted_at IS NULL
+    `,
+        {
+            userId,
+        }
+    );
+
+    const row = rows[0] || {};
+
+    return {
+        total: Number(row.total || 0),
+        publicPosts: Number(row.public_posts || 0),
+        premiumPosts: Number(row.premium_posts || 0),
+        imagesCount: Number(row.images_count || 0),
+        videosCount: Number(row.videos_count || 0),
+    };
+}
+
+async function updateReaction({ viewer, postId, nextReaction }) {
+    const normalizedPostId = parseId(postId, 'postId');
+    const post = await getPostAccessById(normalizedPostId);
+
+    if (!post) {
+        throw ApiError.notFound('Пост не найден.');
+    }
+
+    assertCanViewPost(viewer, post);
+
+    const [reactionRows] = await pool.execute(
+        `
+      SELECT type
+      FROM post_reactions
+      WHERE post_id = :postId
+        AND user_id = :userId
+      LIMIT 1
+    `,
+        {
+            postId: normalizedPostId,
+            userId: viewer.id,
+        }
+    );
+
+    const currentReaction = reactionRows[0]?.type || null;
+
+    if (currentReaction === nextReaction) {
+        await pool.execute(
+            `
+        DELETE FROM post_reactions
+        WHERE post_id = :postId
+          AND user_id = :userId
+      `,
+            {
+                postId: normalizedPostId,
+                userId: viewer.id,
+            }
+        );
+    } else if (currentReaction) {
+        await pool.execute(
+            `
+        UPDATE post_reactions
+        SET type = :nextReaction
+        WHERE post_id = :postId
+          AND user_id = :userId
+      `,
+            {
+                nextReaction,
+                postId: normalizedPostId,
+                userId: viewer.id,
+            }
+        );
+    } else {
+        await pool.execute(
+            `
+        INSERT INTO post_reactions (
+          post_id,
+          user_id,
+          type
+        )
+        VALUES (
+          :postId,
+          :userId,
+          :nextReaction
+        )
+      `,
+            {
+                postId: normalizedPostId,
+                userId: viewer.id,
+                nextReaction,
+            }
+        );
+    }
+
+    if (
+        nextReaction === 'LIKE' &&
+        currentReaction !== 'LIKE' &&
+        post.authorId !== viewer.id
+    ) {
+        await createLikeNotification({
+            postId: normalizedPostId,
+            postAuthorId: post.authorId,
+            actorNickname: viewer.nickname,
+        });
+    }
+
+    return {
+        message: nextReaction === 'LIKE' ? 'Лайк обновлен.' : 'Дизлайк обновлен.',
+    };
+}
+
+async function createLikeNotification({ postId, postAuthorId, actorNickname }) {
+    const [postRows] = await pool.execute(
+        `
+      SELECT title
+      FROM posts
+      WHERE id = :postId
+      LIMIT 1
+    `,
+        {
+            postId,
+        }
+    );
+
+    const postTitle = postRows[0]?.title || 'Без названия';
+
+    await pool.execute(
+        `
+      INSERT INTO notifications (
+        user_id,
+        type,
+        title,
+        text,
+        is_read,
+        post_id,
+        request_id
+      )
+      VALUES (
+        :userId,
+        'NEW_LIKE',
+        'Новый лайк',
+        :text,
+        FALSE,
+        :postId,
+        NULL
+      )
+    `,
+        {
+            userId: postAuthorId,
+            text: `@${actorNickname} поставил лайк вашей публикации «${postTitle}».`,
+            postId,
+        }
+    );
+}
+
+async function savePost({ viewer, postId }) {
+    const normalizedPostId = parseId(postId, 'postId');
+    const post = await getPostAccessById(normalizedPostId);
+
+    if (!post) {
+        throw ApiError.notFound('Пост не найден.');
+    }
+
+    assertCanViewPost(viewer, post);
+
+    await pool.execute(
+        `
+            INSERT IGNORE INTO saved_posts (
+        post_id,
+        user_id
+      )
+      VALUES (
+        :postId,
+        :userId
+      )
+        `,
+        {
+            postId: normalizedPostId,
+            userId: viewer.id,
+        }
+    );
+
+    return {
+        message: 'Пост сохранен.',
+        isSavedByMe: true,
+    };
+}
+
+async function unsavePost({ viewer, postId }) {
+    const normalizedPostId = parseId(postId, 'postId');
+
+    await pool.execute(
+        `
+      DELETE FROM saved_posts
+      WHERE post_id = :postId
+        AND user_id = :userId
+    `,
+        {
+            postId: normalizedPostId,
+            userId: viewer.id,
+        }
+    );
+
+    return {
+        message: 'Пост удален из сохраненных.',
+        isSavedByMe: false,
+    };
+}
+
+function buildCursorResponse(rows, limit) {
+    const hasMore = rows.length > limit;
+    const responseRows = hasMore ? rows.slice(0, limit) : rows;
+    const items = responseRows.map(mapPostRow);
+    const lastItem = items[items.length - 1] || null;
+
+    return {
+        items,
+        posts: items,
+        nextCursor: hasMore ? lastItem?.createdAt || null : null,
+        hasMore,
+        page: 1,
+        totalPages: 1,
+    };
+}
+
+module.exports = {
+    getFeed,
+    getLatestFeedPosts,
+    getPostById,
+    getSavedPosts,
+    getSavedPostsStats,
+    getMyPosts,
+    getMyPostsStats,
+    updateReaction,
+    savePost,
+    unsavePost,
+};

@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import styled from 'styled-components';
@@ -6,15 +6,17 @@ import {
   FiBookmark,
   FiCheckCircle,
   FiEdit3,
+  FiImage,
   FiKey,
-  FiLink,
   FiLogOut,
   FiMail,
   FiRefreshCw,
   FiSave,
   FiShield,
   FiStar,
+  FiTrash2,
   FiUpload,
+  FiUploadCloud,
   FiUser,
 } from 'react-icons/fi';
 
@@ -25,6 +27,8 @@ import {
   useLogoutUserMutation,
   useUpdateProfileMutation,
 } from '../entities/auth/api/authApi';
+
+const MAX_AVATAR_SIZE = 900 * 1024;
 
 export function ProfilePage() {
   const dispatch = useDispatch<AppDispatch>();
@@ -37,7 +41,7 @@ export function ProfilePage() {
 
   const [nickname, setNickname] = useState('');
   const [email, setEmail] = useState('');
-  const [avatarUrl, setAvatarUrl] = useState('');
+  const [avatarDataUrl, setAvatarDataUrl] = useState('');
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -56,7 +60,7 @@ export function ProfilePage() {
 
     setNickname(user.nickname);
     setEmail(user.email);
-    setAvatarUrl(user.avatarUrl || '');
+    setAvatarDataUrl(user.avatarUrl || '');
   }, [user]);
 
   const profileServerError = useMemo(() => {
@@ -83,6 +87,49 @@ export function ProfilePage() {
     }
   };
 
+  const handleAvatarChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+
+    setProfileSuccess(null);
+    setProfileLocalError(null);
+
+    if (!file) {
+      return;
+    }
+
+    if (!file.type.startsWith('image/')) {
+      setProfileLocalError('Выберите файл изображения.');
+      event.target.value = '';
+      return;
+    }
+
+    if (file.size > MAX_AVATAR_SIZE) {
+      setProfileLocalError(
+          'Для mock-режима выберите изображение до 900 KB. Позже backend позволит загружать файлы больше.'
+      );
+      event.target.value = '';
+      return;
+    }
+
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      setAvatarDataUrl(String(reader.result));
+    };
+
+    reader.onerror = () => {
+      setProfileLocalError('Не удалось прочитать файл изображения.');
+    };
+
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveAvatar = () => {
+    setAvatarDataUrl('');
+    setProfileSuccess(null);
+    setProfileLocalError(null);
+  };
+
   const handleUpdateProfile = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
@@ -91,7 +138,6 @@ export function ProfilePage() {
 
     const normalizedNickname = nickname.trim();
     const normalizedEmail = email.trim().toLowerCase();
-    const normalizedAvatarUrl = avatarUrl.trim();
 
     if (normalizedNickname.length < 3) {
       setProfileLocalError('Ник должен содержать минимум 3 символа.');
@@ -107,7 +153,7 @@ export function ProfilePage() {
       const updatedUser = await updateProfile({
         nickname: normalizedNickname,
         email: normalizedEmail,
-        avatarUrl: normalizedAvatarUrl || null,
+        avatarUrl: avatarDataUrl || null,
       }).unwrap();
 
       dispatch(setUser(updatedUser));
@@ -180,8 +226,8 @@ export function ProfilePage() {
       <Page>
         <ProfileHero>
           <AvatarBlock>
-            {avatarUrl ? (
-                <AvatarImage src={avatarUrl} alt={nickname || user.nickname} />
+            {avatarDataUrl ? (
+                <AvatarImage src={avatarDataUrl} alt={nickname || user.nickname} />
             ) : (
                 <AvatarFallback>{user.nickname.slice(0, 1).toUpperCase()}</AvatarFallback>
             )}
@@ -243,6 +289,52 @@ export function ProfilePage() {
 
               {profileError && <ErrorBox>{profileError}</ErrorBox>}
 
+              <AvatarUploadGrid>
+                <AvatarPreviewBox>
+                  {avatarDataUrl ? (
+                      <img src={avatarDataUrl} alt="Аватар пользователя" />
+                  ) : (
+                      <FiImage />
+                  )}
+                </AvatarPreviewBox>
+
+                <AvatarUploadContent>
+                  <Label>Аватар</Label>
+
+                  <AvatarActions>
+                    <AvatarUploadButton htmlFor="profile-avatar-file">
+                      <FiUploadCloud />
+                      Выбрать изображение
+
+                      <input
+                          id="profile-avatar-file"
+                          type="file"
+                          accept="image/*"
+                          disabled={updateProfileState.isLoading}
+                          onChange={handleAvatarChange}
+                      />
+                    </AvatarUploadButton>
+
+                    {avatarDataUrl && (
+                        <RemoveAvatarButton
+                            type="button"
+                            disabled={updateProfileState.isLoading}
+                            onClick={handleRemoveAvatar}
+                        >
+                          <FiTrash2 />
+                          Удалить
+                        </RemoveAvatarButton>
+                    )}
+                  </AvatarActions>
+
+                  <AvatarHint>
+                    Временный mock сохраняет аватар в localStorage, поэтому лучше
+                    выбрать изображение до 900 KB. Позже заменим это на загрузку
+                    файла на backend.
+                  </AvatarHint>
+                </AvatarUploadContent>
+              </AvatarUploadGrid>
+
               <FormGrid>
                 <Field>
                   <Label htmlFor="profile-nickname">Ник</Label>
@@ -283,25 +375,6 @@ export function ProfilePage() {
                   </InputBox>
                 </Field>
               </FormGrid>
-
-              <Field>
-                <Label htmlFor="profile-avatar">Ссылка на аватар</Label>
-
-                <InputBox>
-                  <FiLink />
-                  <input
-                      id="profile-avatar"
-                      value={avatarUrl}
-                      disabled={updateProfileState.isLoading}
-                      placeholder="https://example.com/avatar.jpg"
-                      onChange={(event) => {
-                        setAvatarUrl(event.target.value);
-                        setProfileSuccess(null);
-                        setProfileLocalError(null);
-                      }}
-                  />
-                </InputBox>
-              </Field>
 
               <SubmitButton type="submit" disabled={updateProfileState.isLoading}>
                 <FiSave />
@@ -617,6 +690,104 @@ const IconBox = styled.div`
   font-size: 21px;
 `;
 
+const AvatarUploadGrid = styled.div`
+  padding: 14px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.035);
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 16px;
+  align-items: center;
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    grid-template-columns: 1fr;
+  }
+`;
+
+const AvatarPreviewBox = styled.div`
+  width: 96px;
+  height: 96px;
+  overflow: hidden;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: 32px;
+  background:
+      radial-gradient(circle at top left, rgba(124, 58, 237, 0.3), transparent 40%),
+      rgba(255, 255, 255, 0.05);
+  color: ${({ theme }) => theme.colors.primaryHover};
+  display: grid;
+  place-items: center;
+  font-size: 34px;
+
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+`;
+
+const AvatarUploadContent = styled.div`
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+`;
+
+const AvatarActions = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+`;
+
+const AvatarUploadButton = styled.label`
+  min-height: 42px;
+  padding: 0 14px;
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  color: white;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 900;
+  cursor: pointer;
+
+  input {
+    display: none;
+  }
+
+  &:hover {
+    filter: brightness(1.08);
+  }
+`;
+
+const RemoveAvatarButton = styled.button`
+  min-height: 42px;
+  padding: 0 14px;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: rgba(239, 68, 68, 0.1);
+  color: #fecaca;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 900;
+
+  &:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.16);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+`;
+
+const AvatarHint = styled.p`
+  margin: 0;
+  color: ${({ theme }) => theme.colors.textMuted};
+  font-size: 13px;
+  line-height: 1.5;
+`;
+
 const FormGrid = styled.div`
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -847,8 +1018,8 @@ const StateCard = styled.section`
   border: 1px solid ${({ theme }) => theme.colors.border};
   border-radius: ${({ theme }) => theme.radius.lg};
   background:
-      radial-gradient(circle at top left, rgba(124, 58, 237, 0.2), transparent 34%),
-      rgba(21, 25, 43, 0.86);
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.2), transparent 34%),
+    rgba(21, 25, 43, 0.86);
   display: flex;
   flex-direction: column;
   align-items: center;

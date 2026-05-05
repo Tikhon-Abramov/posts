@@ -1,6 +1,22 @@
+const multer = require('multer');
+
 const ApiError = require('../utils/ApiError');
 
 function errorMiddleware(error, req, res, next) {
+  if (error instanceof multer.MulterError) {
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({
+        message: 'Файл слишком большой.',
+        details: null,
+      });
+    }
+
+    return res.status(400).json({
+      message: 'Ошибка загрузки файла.',
+      details: error.message,
+    });
+  }
+
   const isApiError = error instanceof ApiError;
 
   const statusCode = isApiError ? error.statusCode : 500;

@@ -1,119 +1,214 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useSelector } from 'react-redux';
 import styled from 'styled-components';
 import {
     FiAlertCircle,
     FiBell,
     FiCheckCircle,
     FiHeart,
+    FiLoader,
     FiMessageCircle,
     FiRefreshCw,
     FiTrash2,
     FiXCircle,
 } from 'react-icons/fi';
 
-import type { RootState } from '../app/store';
 import {
-    deleteMockNotification,
-    deleteMockUserNotifications,
-    getMockNotifications,
-    markAllMockNotificationsAsRead,
-    markMockNotificationAsRead,
-    type MockNotification,
-    type NotificationType,
+    useClearNotificationsMutation,
+    useDeleteNotificationMutation,
+    useGetNotificationsQuery,
+    useGetNotificationsStatsQuery,
+    useMarkAllNotificationsAsReadMutation,
+} from '../entities/notification/api/notificationApi';
+import type {
+    MockNotification,
+    NotificationFilter,
+    NotificationType,
 } from '../shared/lib/mockStorage';
 
-type NotificationFilter = 'ALL' | 'UNREAD' | NotificationType;
+const NOTIFICATIONS_LIMIT = 10;
+const STATS_POLLING_INTERVAL = 8000;
 
 export function NotificationsPage() {
-    const user = useSelector((state: RootState) => state.auth.user);
+    const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
-    const [notifications, setNotifications] = useState<MockNotification[]>([]);
     const [filter, setFilter] = useState<NotificationFilter>('ALL');
+    const [cursor, setCursor] = useState<string | null>(null);
+    const [loadedNotifications, setLoadedNotifications] = useState<
+        MockNotification[]
+    >([]);
+    const [nextCursor, setNextCursor] = useState<string | null>(null);
+    const [hasMore, setHasMore] = useState(true);
 
-    const loadNotifications = () => {
-        setNotifications(getMockNotifications());
-    };
+    const {
+        data,
+        isLoading,
+        isFetching,
+        isError,
+        refetch: refetchNotifications,
+    } = useGetNotificationsQuery({
+        cursor,
+        limit: NOTIFICATIONS_LIMIT,
+        filter,
+    });
+
+    const {
+        data: stats,
+        isLoading: isStatsLoading,
+        refetch: refetchStats,
+    } = useGetNotificationsStatsQuery(undefined, {
+        pollingInterval: STATS_POLLING_INTERVAL,
+    });
+
+    const [markAllNotificationsAsRead] = useMarkAllNotificationsAsReadMutation();
+    const [deleteNotification, { isLoading: isDeleting }] =
+        useDeleteNotificationMutation();
+    const [clearNotifications, { isLoading: isClearing }] =
+        useClearNotificationsMutation();
+
+    const isFirstLoading = isLoading && loadedNotifications.length === 0;
+    const isLoadingMore = isFetching && loadedNotifications.length > 0;
 
     useEffect(() => {
-        loadNotifications();
-    }, []);
-
-    const myNotifications = useMemo(() => {
-        if (!user) {
-            return [];
+        if (!data) {
+            return;
         }
 
-        return notifications
-            .filter((notification) => notification.userId === user.id)
-            .sort(
-                (a, b) =>
-                    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        const items = data.items || data.notifications || [];
+
+        setLoadedNotifications((currentNotifications) => {
+            if (!cursor) {
+                return items;
+            }
+
+            return mergeNotificationsKeepingOrder(currentNotifications, items);
+        });
+
+        setNextCursor(data.nextCursor);
+        setHasMore(data.hasMore);
+    }, [cursor, data]);
+
+    useEffect(() => {
+        setCursor(null);
+        setLoadedNotifications([]);
+        setNextCursor(null);
+        setHasMore(true);
+    }, [filter]);
+
+    useEffect(() => {
+        const target = loadMoreRef.current;
+
+        if (!target) {
+            return;
+        }
+
+        const observer = new IntersectionObserver(
+            ([entry]) => {
+                if (!entry.isIntersecting) {
+                    return;
+                }
+
+                if (!hasMore || isFetching || !nextCursor) {
+                    return;
+                }
+
+                setCursor(nextCursor);
+            },
+            {
+                root: null,
+                rootMargin: '700px 0px',
+                threshold: 0,
+            }
+        );
+
+        observer.observe(target);
+
+        return () => {
+            observer.disconnect();
+        };
+    }, [hasMore, isFetching, nextCursor]);
+
+    useEffect(() => {
+        let isMounted = true;
+
+        const markAsReadOnOpen = async () => {
+            try {
+                await markAllNotificationsAsRead().unwrap();
+
+                if (!isMounted) {
+                    return;
+                }
+
+                setLoadedNotifications((currentNotifications) =>
+                    currentNotifications.map((notification) => ({
+                        ...notification,
+                        isRead: true,
+                    }))
+                );
+
+                refetchStats();
+                refetchNotifications();
+            } catch {
+                /*
+                  Если mock/backend временно недоступен, страница все равно покажет
+                  уведомления. Ошибка отметки прочитанными не должна ломать экран.
+                */
+            }
+        };
+
+        markAsReadOnOpen();
+
+        return () => {
+            isMounted = false;
+        };
+    }, [markAllNotificationsAsRead, refetchNotifications, refetchStats]);
+
+    const handleRefresh = () => {
+        setCursor(null);
+        setLoadedNotifications([]);
+        setNextCursor(null);
+        setHasMore(true);
+
+        refetchNotifications();
+        refetchStats();
+    };
+
+    const handleDelete = async (notificationId: number) => {
+        try {
+            await deleteNotification(notificationId).unwrap();
+
+            setLoadedNotifications((currentNotifications) =>
+                currentNotifications.filter(
+                    (notification) => notification.id !== notificationId
+                )
             );
-    }, [notifications, user]);
 
-    const filteredNotifications = useMemo(() => {
-        if (filter === 'ALL') {
-            return myNotifications;
+            refetchStats();
+        } catch {
+            window.alert('Не удалось удалить уведомление.');
         }
-
-        if (filter === 'UNREAD') {
-            return myNotifications.filter((notification) => !notification.isRead);
-        }
-
-        return myNotifications.filter((notification) => notification.type === filter);
-    }, [filter, myNotifications]);
-
-    const unreadCount = myNotifications.filter(
-        (notification) => !notification.isRead
-    ).length;
-
-    const approvedCount = myNotifications.filter(
-        (notification) => notification.type === 'REQUEST_APPROVED'
-    ).length;
-
-    const rejectedCount = myNotifications.filter(
-        (notification) => notification.type === 'REQUEST_REJECTED'
-    ).length;
-
-    const socialCount = myNotifications.filter(
-        (notification) =>
-            notification.type === 'NEW_LIKE' || notification.type === 'NEW_COMMENT'
-    ).length;
-
-    const handleMarkAsRead = (notificationId: number) => {
-        const nextNotifications = markMockNotificationAsRead(notificationId);
-        setNotifications(nextNotifications);
     };
 
-    const handleMarkAllAsRead = () => {
-        if (!user) {
-            return;
-        }
-
-        const nextNotifications = markAllMockNotificationsAsRead(user.id);
-        setNotifications(nextNotifications);
-    };
-
-    const handleDelete = (notificationId: number) => {
-        const nextNotifications = deleteMockNotification(notificationId);
-        setNotifications(nextNotifications);
-    };
-
-    const handleClearMine = () => {
-        if (!user) {
-            return;
-        }
-
+    const handleClearAll = async () => {
         const isConfirmed = window.confirm('Удалить все ваши уведомления?');
 
         if (!isConfirmed) {
             return;
         }
 
-        const nextNotifications = deleteMockUserNotifications(user.id);
-        setNotifications(nextNotifications);
+        try {
+            await clearNotifications().unwrap();
+
+            setCursor(null);
+            setLoadedNotifications([]);
+            setNextCursor(null);
+            setHasMore(false);
+
+            refetchStats();
+            refetchNotifications();
+        } catch {
+            window.alert('Не удалось очистить уведомления.');
+        }
     };
 
     return (
@@ -125,21 +220,25 @@ export function NotificationsPage() {
                     <Title>Уведомления</Title>
 
                     <Subtitle>
-                        Здесь отображаются уведомления о подтвержденных и отклоненных
-                        заявках, новых лайках и комментариях к вашим публикациям.
+                        Уведомления о заявках, лайках и комментариях. При открытии этой
+                        страницы все новые уведомления автоматически помечаются прочитанными.
                     </Subtitle>
                 </HeroContent>
 
                 <HeroActions>
-                    <RefreshButton type="button" onClick={loadNotifications}>
+                    <RefreshButton type="button" onClick={handleRefresh}>
                         <FiRefreshCw />
                         Обновить
                     </RefreshButton>
 
-                    {myNotifications.length > 0 && (
-                        <DangerButton type="button" onClick={handleClearMine}>
+                    {(stats?.total || loadedNotifications.length) > 0 && (
+                        <DangerButton
+                            type="button"
+                            disabled={isClearing}
+                            onClick={handleClearAll}
+                        >
                             <FiTrash2 />
-                            Очистить
+                            {isClearing ? 'Очищаем...' : 'Очистить'}
                         </DangerButton>
                     )}
                 </HeroActions>
@@ -149,7 +248,7 @@ export function NotificationsPage() {
                 <StatCard>
                     <FiBell />
                     <div>
-                        <strong>{unreadCount}</strong>
+                        <strong>{isStatsLoading ? '...' : stats?.unread || 0}</strong>
                         <span>Новых</span>
                     </div>
                 </StatCard>
@@ -157,7 +256,7 @@ export function NotificationsPage() {
                 <StatCard>
                     <FiCheckCircle />
                     <div>
-                        <strong>{approvedCount}</strong>
+                        <strong>{isStatsLoading ? '...' : stats?.approved || 0}</strong>
                         <span>Одобрено</span>
                     </div>
                 </StatCard>
@@ -165,7 +264,7 @@ export function NotificationsPage() {
                 <StatCard>
                     <FiXCircle />
                     <div>
-                        <strong>{rejectedCount}</strong>
+                        <strong>{isStatsLoading ? '...' : stats?.rejected || 0}</strong>
                         <span>Отклонено</span>
                     </div>
                 </StatCard>
@@ -173,7 +272,7 @@ export function NotificationsPage() {
                 <StatCard>
                     <FiHeart />
                     <div>
-                        <strong>{socialCount}</strong>
+                        <strong>{isStatsLoading ? '...' : stats?.social || 0}</strong>
                         <span>Лайки / комментарии</span>
                     </div>
                 </StatCard>
@@ -230,85 +329,108 @@ export function NotificationsPage() {
                     </FilterButton>
                 </FilterGroup>
 
-                <MarkAllButton
-                    type="button"
-                    disabled={!unreadCount}
-                    onClick={handleMarkAllAsRead}
-                >
-                    Прочитать все
-                </MarkAllButton>
+                <ToolbarMeta>
+                    Всего: {isStatsLoading ? '...' : stats?.total || 0}
+                </ToolbarMeta>
             </Toolbar>
 
-            {filteredNotifications.length ? (
-                <NotificationsList>
-                    {filteredNotifications.map((notification) => (
-                        <NotificationCard
-                            key={notification.id}
-                            $unread={!notification.isRead}
-                        >
-                            <NotificationIcon $type={notification.type}>
-                                {getNotificationIcon(notification.type)}
-                            </NotificationIcon>
+            {isFirstLoading ? (
+                <LoadingCard>
+                    <FiLoader />
+                    <h2>Загружаем уведомления</h2>
+                    <p>Сейчас покажем вашу активность.</p>
+                </LoadingCard>
+            ) : isError && !loadedNotifications.length ? (
+                <EmptyCard>
+                    <FiAlertCircle />
 
-                            <NotificationBody>
-                                <NotificationTop>
-                                    <div>
-                                        <NotificationTitle>
-                                            {notification.title}
-                                            {!notification.isRead && <UnreadDot />}
-                                        </NotificationTitle>
+                    <h2>Не удалось загрузить уведомления</h2>
 
-                                        <NotificationDate>
-                                            {new Date(notification.createdAt).toLocaleString('ru-RU')}
-                                        </NotificationDate>
-                                    </div>
+                    <p>Попробуйте обновить страницу или повторить запрос.</p>
 
-                                    <TypeBadge $type={notification.type}>
-                                        {getNotificationTypeText(notification.type)}
-                                    </TypeBadge>
-                                </NotificationTop>
+                    <PrimaryButton type="button" onClick={handleRefresh}>
+                        Повторить
+                    </PrimaryButton>
+                </EmptyCard>
+            ) : loadedNotifications.length ? (
+                <>
+                    <FeedMeta>
+                        <span>Загружено на странице: {loadedNotifications.length}</span>
 
-                                <NotificationText>{notification.text}</NotificationText>
+                        {isLoadingMore && (
+                            <LoadingInline>
+                                <FiLoader />
+                                Подгружаем еще...
+                            </LoadingInline>
+                        )}
+                    </FeedMeta>
 
-                                <NotificationActions>
-                                    {!notification.isRead && (
-                                        <SmallButton
+                    <NotificationsList>
+                        {loadedNotifications.map((notification) => (
+                            <NotificationCard
+                                key={notification.id}
+                                $unread={!notification.isRead}
+                            >
+                                <NotificationIcon $type={notification.type}>
+                                    {getNotificationIcon(notification.type)}
+                                </NotificationIcon>
+
+                                <NotificationBody>
+                                    <NotificationTop>
+                                        <div>
+                                            <NotificationTitle>
+                                                {notification.title}
+                                                {!notification.isRead && <UnreadDot />}
+                                            </NotificationTitle>
+
+                                            <NotificationDate>
+                                                {new Date(notification.createdAt).toLocaleString('ru-RU')}
+                                            </NotificationDate>
+                                        </div>
+
+                                        <TypeBadge $type={notification.type}>
+                                            {getNotificationTypeText(notification.type)}
+                                        </TypeBadge>
+                                    </NotificationTop>
+
+                                    <NotificationText>{notification.text}</NotificationText>
+
+                                    <NotificationActions>
+                                        {notification.postId ? (
+                                            <SmallLink to={`/posts/${notification.postId}`}>
+                                                Открыть пост
+                                            </SmallLink>
+                                        ) : notification.requestId ? (
+                                            <SmallLink to="/my-posts">Открыть мои заявки</SmallLink>
+                                        ) : null}
+
+                                        <DeleteButton
                                             type="button"
-                                            onClick={() => handleMarkAsRead(notification.id)}
+                                            disabled={isDeleting}
+                                            onClick={() => handleDelete(notification.id)}
                                         >
-                                            <FiCheckCircle />
-                                            Прочитано
-                                        </SmallButton>
-                                    )}
+                                            <FiTrash2 />
+                                            Удалить
+                                        </DeleteButton>
+                                    </NotificationActions>
+                                </NotificationBody>
+                            </NotificationCard>
+                        ))}
+                    </NotificationsList>
 
-                                    {notification.postId ? (
-                                        <SmallLink
-                                            to={`/posts/${notification.postId}`}
-                                            onClick={() => handleMarkAsRead(notification.id)}
-                                        >
-                                            Открыть пост
-                                        </SmallLink>
-                                    ) : notification.requestId ? (
-                                        <SmallLink
-                                            to="/my-posts"
-                                            onClick={() => handleMarkAsRead(notification.id)}
-                                        >
-                                            Открыть мои заявки
-                                        </SmallLink>
-                                    ) : null}
-
-                                    <DeleteButton
-                                        type="button"
-                                        onClick={() => handleDelete(notification.id)}
-                                    >
-                                        <FiTrash2 />
-                                        Удалить
-                                    </DeleteButton>
-                                </NotificationActions>
-                            </NotificationBody>
-                        </NotificationCard>
-                    ))}
-                </NotificationsList>
+                    <LoadMoreAnchor ref={loadMoreRef}>
+                        {hasMore ? (
+                            <LoadingMore>
+                                <FiLoader />
+                                <span>Листайте ниже — уведомления подгрузятся автоматически</span>
+                            </LoadingMore>
+                        ) : (
+                            <EndMessage>
+                                Вы посмотрели все уведомления по текущему фильтру
+                            </EndMessage>
+                        )}
+                    </LoadMoreAnchor>
+                </>
             ) : (
                 <EmptyCard>
                     <FiAlertCircle />
@@ -325,6 +447,19 @@ export function NotificationsPage() {
             )}
         </Page>
     );
+}
+
+function mergeNotificationsKeepingOrder(
+    first: MockNotification[],
+    second: MockNotification[]
+) {
+    const map = new Map<number, MockNotification>();
+
+    [...first, ...second].forEach((notification) => {
+        map.set(notification.id, notification);
+    });
+
+    return Array.from(map.values());
 }
 
 function getNotificationIcon(type: NotificationType) {
@@ -360,55 +495,55 @@ function getNotificationTypeText(type: NotificationType) {
 }
 
 const Page = styled.div`
-    display: grid;
-    gap: 18px;
+  display: grid;
+  gap: 18px;
 `;
 
 const Hero = styled.section`
-    padding: 22px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.lg};
-    background:
-            radial-gradient(circle at top left, rgba(124, 58, 237, 0.24), transparent 34%),
-            radial-gradient(circle at bottom right, rgba(239, 68, 68, 0.14), transparent 34%),
-            rgba(21, 25, 43, 0.86);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 18px;
+  padding: 22px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background:
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.24), transparent 34%),
+    radial-gradient(circle at bottom right, rgba(239, 68, 68, 0.14), transparent 34%),
+    rgba(21, 25, 43, 0.86);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
 
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        align-items: flex-start;
-        flex-direction: column;
-        padding: 18px;
-    }
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 18px;
+  }
 `;
 
 const HeroContent = styled.div`
-    min-width: 0;
+  min-width: 0;
 `;
 
 const Eyebrow = styled.div`
-    margin-bottom: 8px;
-    color: ${({ theme }) => theme.colors.primaryHover};
-    font-size: 13px;
-    font-weight: 900;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
+  margin-bottom: 8px;
+  color: ${({ theme }) => theme.colors.primaryHover};
+  font-size: 13px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 `;
 
 const Title = styled.h1`
-    margin: 0;
-    font-size: clamp(30px, 5vw, 52px);
-    line-height: 0.96;
-    letter-spacing: -0.075em;
+  margin: 0;
+  font-size: clamp(30px, 5vw, 52px);
+  line-height: 0.96;
+  letter-spacing: -0.075em;
 `;
 
 const Subtitle = styled.p`
-    max-width: 720px;
-    margin: 12px 0 0;
-    color: ${({ theme }) => theme.colors.textMuted};
-    line-height: 1.65;
+  max-width: 720px;
+  margin: 12px 0 0;
+  color: ${({ theme }) => theme.colors.textMuted};
+  line-height: 1.65;
 `;
 
 const HeroActions = styled.div`
@@ -450,8 +585,13 @@ const DangerButton = styled.button`
     gap: 9px;
     font-weight: 900;
 
-    &:hover {
+    &:hover:not(:disabled) {
         background: rgba(239, 68, 68, 0.16);
+    }
+
+    &:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
     }
 `;
 
@@ -550,22 +690,88 @@ const FilterButton = styled.button<{ $active?: boolean }>`
     }
 `;
 
-const MarkAllButton = styled.button`
+const ToolbarMeta = styled.div`
     min-height: 40px;
-    padding: 0 14px;
+    padding: 0 13px;
     border: 1px solid ${({ theme }) => theme.colors.border};
     border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(255, 255, 255, 0.05);
-    color: ${({ theme }) => theme.colors.text};
+    background: rgba(255, 255, 255, 0.04);
+    color: ${({ theme }) => theme.colors.textMuted};
+    display: inline-flex;
+    align-items: center;
+    font-size: 13px;
     font-weight: 900;
+`;
 
-    &:hover:not(:disabled) {
-        background: rgba(255, 255, 255, 0.09);
+const FeedMeta = styled.div`
+    padding: 0 4px;
+    color: ${({ theme }) => theme.colors.textMuted};
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 13px;
+    font-weight: 800;
+
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+`;
+
+const LoadingInline = styled.div`
+    color: ${({ theme }) => theme.colors.primaryHover};
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+
+    svg {
+        animation: spin 0.8s linear infinite;
     }
 
-    &:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
+    @keyframes spin {
+        to {
+            transform: rotate(360deg);
+        }
+    }
+`;
+
+const LoadingCard = styled.section`
+    min-height: 360px;
+    padding: 30px 22px;
+    border: 1px dashed rgba(139, 92, 246, 0.34);
+    border-radius: ${({ theme }) => theme.radius.lg};
+    background: rgba(21, 25, 43, 0.74);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+
+    > svg {
+        margin-bottom: 16px;
+        color: ${({ theme }) => theme.colors.primaryHover};
+        font-size: 44px;
+        animation: spin 0.8s linear infinite;
+    }
+
+    h2 {
+        margin: 0 0 10px;
+        font-size: clamp(24px, 4vw, 34px);
+        letter-spacing: -0.06em;
+    }
+
+    p {
+        max-width: 480px;
+        margin: 0;
+        color: ${({ theme }) => theme.colors.textMuted};
+        line-height: 1.6;
+    }
+
+    @keyframes spin {
+        to {
+            transform: rotate(360deg);
+        }
     }
 `;
 
@@ -684,24 +890,6 @@ const NotificationActions = styled.div`
     gap: 8px;
 `;
 
-const SmallButton = styled.button`
-    min-height: 34px;
-    padding: 0 11px;
-    border: 1px solid rgba(34, 197, 94, 0.3);
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(34, 197, 94, 0.1);
-    color: #bbf7d0;
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    font-size: 12px;
-    font-weight: 900;
-
-    &:hover {
-        background: rgba(34, 197, 94, 0.16);
-    }
-`;
-
 const SmallLink = styled(Link)`
     min-height: 34px;
     padding: 0 11px;
@@ -732,9 +920,50 @@ const DeleteButton = styled.button`
     font-size: 12px;
     font-weight: 900;
 
-    &:hover {
+    &:hover:not(:disabled) {
         background: rgba(239, 68, 68, 0.15);
     }
+
+    &:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+`;
+
+const LoadMoreAnchor = styled.div`
+    min-height: 80px;
+    display: grid;
+    place-items: center;
+`;
+
+const LoadingMore = styled.div`
+    padding: 12px 16px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: rgba(255, 255, 255, 0.045);
+    color: ${({ theme }) => theme.colors.textMuted};
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 13px;
+    font-weight: 900;
+
+    svg {
+        color: ${({ theme }) => theme.colors.primaryHover};
+        animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+        to {
+            transform: rotate(360deg);
+        }
+    }
+`;
+
+const EndMessage = styled.div`
+    color: ${({ theme }) => theme.colors.textMuted};
+    font-size: 13px;
+    font-weight: 800;
 `;
 
 const EmptyCard = styled.section`
@@ -780,6 +1009,21 @@ const PrimaryLink = styled(Link)`
     color: white;
     display: inline-flex;
     align-items: center;
+    font-weight: 900;
+
+    &:hover {
+        filter: brightness(1.08);
+    }
+`;
+
+const PrimaryButton = styled.button`
+    min-height: 46px;
+    margin-top: 22px;
+    padding: 0 16px;
+    border: none;
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: linear-gradient(135deg, #7c3aed, #2563eb);
+    color: white;
     font-weight: 900;
 
     &:hover {

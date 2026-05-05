@@ -1,149 +1,177 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import styled from 'styled-components';
 import {
     FiAlertCircle,
-    FiBookmark,
-    FiCalendar,
+    FiExternalLink,
     FiFileText,
     FiFilter,
     FiGlobe,
     FiHeart,
     FiImage,
+    FiLoader,
     FiMessageCircle,
     FiRefreshCw,
     FiSearch,
     FiStar,
-    FiThumbsDown,
     FiTrash2,
+    FiUser,
     FiVideo,
 } from 'react-icons/fi';
 
 import type {
-    MediaType,
     Post,
     PostVisibility,
 } from '../../entities/post/model/postTypes';
+import {
+    useDeleteAdminPostMutation,
+    useGetAdminPostsQuery,
+    useGetAdminPostsStatsQuery,
+} from '../../entities/admin/api/adminPostApi';
+import type { MediaFilter, SortMode } from '../../shared/lib/mockStorage';
 
 type VisibilityFilter = 'ALL' | PostVisibility;
-type MediaFilter = 'ALL' | MediaType;
 
-type MockPostInteractions = Record<
-    string,
-    Record<
-        string,
-        {
-            reaction: 'like' | 'dislike' | null;
-            saved: boolean;
-        }
-    >
->;
-
-const MOCK_POSTS_KEY = 'pulsefeed_mock_posts';
-const MOCK_POST_INTERACTIONS_KEY = 'pulsefeed_mock_post_interactions';
+const POSTS_LIMIT = 12;
 
 export function AdminPostsPage() {
-    const [posts, setPosts] = useState<Post[]>([]);
+    const loadMoreRef = useRef<HTMLDivElement | null>(null);
+
+    const [searchQuery, setSearchQuery] = useState('');
     const [visibilityFilter, setVisibilityFilter] =
         useState<VisibilityFilter>('ALL');
     const [mediaFilter, setMediaFilter] = useState<MediaFilter>('ALL');
-    const [search, setSearch] = useState('');
+    const [sortMode, setSortMode] = useState<SortMode>('RECENT');
 
-    const loadPosts = () => {
-        setPosts(getSavedPosts());
-    };
+    const [cursor, setCursor] = useState<string | null>(null);
+    const [loadedPosts, setLoadedPosts] = useState<Post[]>([]);
+    const [nextCursor, setNextCursor] = useState<string | null>(null);
+    const [hasMore, setHasMore] = useState(true);
+
+    const {
+        data,
+        isLoading,
+        isFetching,
+        isError,
+        refetch: refetchPosts,
+    } = useGetAdminPostsQuery({
+        cursor,
+        limit: POSTS_LIMIT,
+        search: searchQuery,
+        visibility: visibilityFilter,
+        mediaType: mediaFilter,
+        sort: sortMode,
+    });
+
+    const {
+        data: stats,
+        isLoading: isStatsLoading,
+        refetch: refetchStats,
+    } = useGetAdminPostsStatsQuery();
+
+    const [deleteAdminPost, { isLoading: isDeleting }] =
+        useDeleteAdminPostMutation();
+
+    const isFirstLoading = isLoading && loadedPosts.length === 0;
+    const isLoadingMore = isFetching && loadedPosts.length > 0;
 
     useEffect(() => {
-        loadPosts();
-    }, []);
-
-    const stats = useMemo(() => {
-        const publicCount = posts.filter(
-            (post) => post.visibility === 'PUBLIC'
-        ).length;
-
-        const premiumCount = posts.filter(
-            (post) => post.visibility === 'PREMIUM'
-        ).length;
-
-        const imageCount = posts.filter(
-            (post) => post.media[0]?.type === 'IMAGE'
-        ).length;
-
-        const videoCount = posts.filter(
-            (post) => post.media[0]?.type === 'VIDEO'
-        ).length;
-
-        return {
-            publicCount,
-            premiumCount,
-            imageCount,
-            videoCount,
-        };
-    }, [posts]);
-
-    const filteredPosts = useMemo(() => {
-        const normalizedSearch = search.trim().toLowerCase();
-
-        return posts
-            .filter((post) => {
-                if (visibilityFilter !== 'ALL' && post.visibility !== visibilityFilter) {
-                    return false;
-                }
-
-                if (mediaFilter !== 'ALL' && post.media[0]?.type !== mediaFilter) {
-                    return false;
-                }
-
-                if (!normalizedSearch) {
-                    return true;
-                }
-
-                const title = post.title?.toLowerCase() || '';
-                const description = post.description?.toLowerCase() || '';
-                const author = post.author.nickname.toLowerCase();
-
-                return (
-                    title.includes(normalizedSearch) ||
-                    description.includes(normalizedSearch) ||
-                    author.includes(normalizedSearch)
-                );
-            })
-            .sort(
-                (a, b) =>
-                    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-            );
-    }, [mediaFilter, posts, search, visibilityFilter]);
-
-    const updatePosts = (nextPosts: Post[]) => {
-        setPosts(nextPosts);
-        localStorage.setItem(MOCK_POSTS_KEY, JSON.stringify(nextPosts));
-    };
-
-    const handleDeletePost = (postId: number) => {
-        const post = posts.find((item) => item.id === postId);
-
-        if (!post) {
+        if (!data) {
             return;
         }
 
+        const items = data.items || data.posts || [];
+
+        setLoadedPosts((currentPosts) => {
+            if (!cursor) {
+                return items;
+            }
+
+            return mergePostsKeepingOrder(currentPosts, items);
+        });
+
+        setNextCursor(data.nextCursor);
+        setHasMore(data.hasMore);
+    }, [cursor, data]);
+
+    useEffect(() => {
+        setCursor(null);
+        setLoadedPosts([]);
+        setNextCursor(null);
+        setHasMore(true);
+    }, [mediaFilter, searchQuery, sortMode, visibilityFilter]);
+
+    useEffect(() => {
+        const target = loadMoreRef.current;
+
+        if (!target) {
+            return;
+        }
+
+        const observer = new IntersectionObserver(
+            ([entry]) => {
+                if (!entry.isIntersecting) {
+                    return;
+                }
+
+                if (!hasMore || isFetching || !nextCursor) {
+                    return;
+                }
+
+                setCursor(nextCursor);
+            },
+            {
+                root: null,
+                rootMargin: '700px 0px',
+                threshold: 0,
+            }
+        );
+
+        observer.observe(target);
+
+        return () => {
+            observer.disconnect();
+        };
+    }, [hasMore, isFetching, nextCursor]);
+
+    const resetFilters = () => {
+        setSearchQuery('');
+        setVisibilityFilter('ALL');
+        setMediaFilter('ALL');
+        setSortMode('RECENT');
+    };
+
+    const handleRefresh = () => {
+        setCursor(null);
+        setLoadedPosts([]);
+        setNextCursor(null);
+        setHasMore(true);
+
+        refetchPosts();
+        refetchStats();
+    };
+
+    const handleDeletePost = async (post: Post) => {
         const isConfirmed = window.confirm(
-            `Удалить пост «${post.title || 'Без названия'}»? Это действие нельзя отменить.`
+            `Удалить пост «${post.title || 'Без названия'}»? Комментарии, реакции, сохранения и уведомления к нему тоже будут очищены.`
         );
 
         if (!isConfirmed) {
             return;
         }
 
-        const nextPosts = posts.filter((item) => item.id !== postId);
+        try {
+            await deleteAdminPost(post.id).unwrap();
 
-        updatePosts(nextPosts);
-        removePostInteractions(postId);
-    };
+            setLoadedPosts((currentPosts) =>
+                currentPosts.filter((item) => item.id !== post.id)
+            );
 
-    const resetFilters = () => {
-        setVisibilityFilter('ALL');
-        setMediaFilter('ALL');
-        setSearch('');
+            refetchPosts();
+            refetchStats();
+        } catch {
+            window.alert('Не удалось удалить пост.');
+        }
     };
 
     return (
@@ -151,73 +179,71 @@ export function AdminPostsPage() {
             <Hero>
                 <HeroContent>
                     <Eyebrow>Admin</Eyebrow>
-                    <Title>Управление постами</Title>
+
+                    <Title>Посты</Title>
+
                     <Subtitle>
-                        Здесь админ видит все опубликованные материалы: обычные и Premium
-                        посты, фото и видео. Пока данные хранятся во фронтовом localStorage.
+                        Управление опубликованными материалами. Список постов подгружается
+                        частями, а статистика берется отдельным запросом, поэтому счетчики
+                        не зависят от количества уже загруженных карточек.
                     </Subtitle>
                 </HeroContent>
 
-                <RefreshButton type="button" onClick={loadPosts}>
-                    <FiRefreshCw />
-                    Обновить
-                </RefreshButton>
+                <HeroActions>
+                    <CreateLink to="/admin/posts/create">
+                        <FiFileText />
+                        Создать пост
+                    </CreateLink>
+
+                    <RefreshButton type="button" onClick={handleRefresh}>
+                        <FiRefreshCw />
+                        Обновить
+                    </RefreshButton>
+                </HeroActions>
             </Hero>
 
             <StatsGrid>
                 <StatCard>
-                    <StatIcon $variant="blue">
-                        <FiGlobe />
-                    </StatIcon>
-
-                    <StatInfo>
-                        <strong>{stats.publicCount}</strong>
-                        <span>Обычных постов</span>
-                    </StatInfo>
+                    <FiFileText />
+                    <div>
+                        <strong>{isStatsLoading ? '...' : stats?.total || 0}</strong>
+                        <span>Всего постов</span>
+                    </div>
                 </StatCard>
 
                 <StatCard>
-                    <StatIcon $variant="pink">
-                        <FiStar />
-                    </StatIcon>
-
-                    <StatInfo>
-                        <strong>{stats.premiumCount}</strong>
-                        <span>Premium постов</span>
-                    </StatInfo>
+                    <FiGlobe />
+                    <div>
+                        <strong>{isStatsLoading ? '...' : stats?.publicPosts || 0}</strong>
+                        <span>Обычная лента</span>
+                    </div>
                 </StatCard>
 
                 <StatCard>
-                    <StatIcon $variant="purple">
-                        <FiImage />
-                    </StatIcon>
-
-                    <StatInfo>
-                        <strong>{stats.imageCount}</strong>
-                        <span>Фото</span>
-                    </StatInfo>
+                    <FiStar />
+                    <div>
+                        <strong>{isStatsLoading ? '...' : stats?.premiumPosts || 0}</strong>
+                        <span>Premium</span>
+                    </div>
                 </StatCard>
 
                 <StatCard>
-                    <StatIcon $variant="red">
-                        <FiVideo />
-                    </StatIcon>
-
-                    <StatInfo>
-                        <strong>{stats.videoCount}</strong>
+                    <FiVideo />
+                    <div>
+                        <strong>{isStatsLoading ? '...' : stats?.videosCount || 0}</strong>
                         <span>Видео</span>
-                    </StatInfo>
+                    </div>
                 </StatCard>
             </StatsGrid>
 
             <Toolbar>
                 <SearchBox>
                     <FiSearch />
+
                     <input
-                        type="text"
-                        placeholder="Поиск по названию, описанию или автору"
-                        value={search}
-                        onChange={(event) => setSearch(event.target.value)}
+                        value={searchQuery}
+                        placeholder="Поиск по ID, названию, описанию или автору..."
+                        onChange={(event) => setSearchQuery(event.target.value)}
                     />
                 </SearchBox>
 
@@ -229,7 +255,7 @@ export function AdminPostsPage() {
                         }
                     >
                         <option value="ALL">Все ленты</option>
-                        <option value="PUBLIC">Обычная лента</option>
+                        <option value="PUBLIC">Обычная</option>
                         <option value="PREMIUM">Premium</option>
                     </FilterSelect>
 
@@ -239,198 +265,219 @@ export function AdminPostsPage() {
                             setMediaFilter(event.target.value as MediaFilter)
                         }
                     >
-                        <option value="ALL">Все типы</option>
-                        <option value="IMAGE">Фото</option>
-                        <option value="VIDEO">Видео</option>
+                        <option value="ALL">Фото и видео</option>
+                        <option value="IMAGE">Только фото</option>
+                        <option value="VIDEO">Только видео</option>
                     </FilterSelect>
 
-                    <ResetButton type="button" onClick={resetFilters}>
-                        <FiFilter />
-                        Сбросить
-                    </ResetButton>
+                    <FilterSelect
+                        value={sortMode}
+                        onChange={(event) => setSortMode(event.target.value as SortMode)}
+                    >
+                        <option value="RECENT">Сначала новые</option>
+                        <option value="POPULAR">Сначала популярные</option>
+                    </FilterSelect>
                 </Filters>
+
+                <ResetButton type="button" onClick={resetFilters}>
+                    <FiFilter />
+                    Сбросить
+                </ResetButton>
             </Toolbar>
 
-            {filteredPosts.length ? (
-                <PostsGrid>
-                    {filteredPosts.map((post) => {
-                        const firstMedia = post.media[0];
+            {isFirstLoading ? (
+                <StateCard>
+                    <FiLoader />
 
-                        return (
-                            <PostCard key={post.id}>
-                                <Preview>
-                                    {firstMedia?.type === 'IMAGE' ? (
-                                        <img src={firstMedia.url} alt={post.title || 'Пост'} />
-                                    ) : firstMedia?.type === 'VIDEO' ? (
-                                        <VideoPreview>
-                                            <video src={firstMedia.url} muted />
-                                            <VideoOverlay>
+                    <h2>Загружаем посты</h2>
+
+                    <p>Сейчас покажем опубликованные материалы.</p>
+                </StateCard>
+            ) : isError && !loadedPosts.length ? (
+                <StateCard>
+                    <FiAlertCircle />
+
+                    <h2>Не удалось загрузить посты</h2>
+
+                    <p>Попробуйте повторить загрузку.</p>
+
+                    <PrimaryButton type="button" onClick={handleRefresh}>
+                        Повторить
+                    </PrimaryButton>
+                </StateCard>
+            ) : loadedPosts.length ? (
+                <>
+                    <FeedMeta>
+                        <span>Загружено на странице: {loadedPosts.length}</span>
+
+                        {isLoadingMore && (
+                            <LoadingInline>
+                                <FiLoader />
+                                Подгружаем еще...
+                            </LoadingInline>
+                        )}
+                    </FeedMeta>
+
+                    <PostsList>
+                        {loadedPosts.map((post) => {
+                            const firstMedia = post.media[0];
+
+                            return (
+                                <PostRow key={post.id}>
+                                    <Preview>
+                                        {firstMedia?.type === 'IMAGE' ? (
+                                            <img src={firstMedia.url} alt={post.title || 'Пост'} />
+                                        ) : firstMedia?.type === 'VIDEO' ? (
+                                            <VideoPreview>
                                                 <FiVideo />
-                                                Видео
-                                            </VideoOverlay>
-                                        </VideoPreview>
-                                    ) : (
-                                        <Placeholder>
-                                            <FiFileText />
-                                            <span>Нет медиа</span>
-                                        </Placeholder>
-                                    )}
-
-                                    <VisibilityBadge $visibility={post.visibility}>
-                                        {post.visibility === 'PREMIUM' ? (
-                                            <>
-                                                <FiStar />
-                                                Premium
-                                            </>
+                                                <span>Видео</span>
+                                            </VideoPreview>
                                         ) : (
-                                            <>
-                                                <FiGlobe />
-                                                Public
-                                            </>
+                                            <VideoPreview>
+                                                <FiImage />
+                                                <span>Без медиа</span>
+                                            </VideoPreview>
                                         )}
-                                    </VisibilityBadge>
-                                </Preview>
 
-                                <CardBody>
-                                    <CardHeader>
-                                        <div>
-                                            <PostTitle>{post.title || 'Без названия'}</PostTitle>
-                                            <Meta>
-                                                @{post.author.nickname} •{' '}
-                                                {new Date(post.createdAt).toLocaleString('ru-RU')}
-                                            </Meta>
-                                        </div>
+                                        <VisibilityBadge $visibility={post.visibility}>
+                                            {post.visibility === 'PREMIUM' ? (
+                                                <>
+                                                    <FiStar />
+                                                    Premium
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <FiGlobe />
+                                                    Public
+                                                </>
+                                            )}
+                                        </VisibilityBadge>
+                                    </Preview>
 
-                                        <MediaBadge>
-                                            {firstMedia?.type === 'VIDEO' ? <FiVideo /> : <FiImage />}
-                                            {firstMedia?.type === 'VIDEO' ? 'Видео' : 'Фото'}
-                                        </MediaBadge>
-                                    </CardHeader>
+                                    <PostBody>
+                                        <PostTop>
+                                            <PostTitleBlock>
+                                                <PostTitle>{post.title || 'Без названия'}</PostTitle>
 
-                                    <Description>
-                                        {post.description || 'Описание не добавлено.'}
-                                    </Description>
+                                                <PostMeta>
+                                                    ID {post.id} •{' '}
+                                                    {new Date(post.createdAt).toLocaleString('ru-RU')}
+                                                </PostMeta>
+                                            </PostTitleBlock>
 
-                                    <Metrics>
-                                        <Metric>
-                                            <FiHeart />
-                                            <span>{post.likesCount}</span>
-                                        </Metric>
+                                            <MediaBadge>
+                                                {firstMedia?.type === 'VIDEO' ? <FiVideo /> : <FiImage />}
+                                                {firstMedia?.type === 'VIDEO' ? 'Видео' : 'Фото'}
+                                            </MediaBadge>
+                                        </PostTop>
 
-                                        <Metric>
-                                            <FiThumbsDown />
-                                            <span>{post.dislikesCount}</span>
-                                        </Metric>
+                                        {post.description ? (
+                                            <Description>{post.description}</Description>
+                                        ) : (
+                                            <DescriptionMuted>Описание не указано</DescriptionMuted>
+                                        )}
 
-                                        <Metric>
-                                            <FiMessageCircle />
-                                            <span>{post.commentsCount}</span>
-                                        </Metric>
+                                        <AuthorBlock>
+                                            <AuthorAvatar>
+                                                {post.author.avatarUrl ? (
+                                                    <img
+                                                        src={post.author.avatarUrl}
+                                                        alt={post.author.nickname}
+                                                    />
+                                                ) : (
+                                                    <FiUser />
+                                                )}
+                                            </AuthorAvatar>
 
-                                        <Metric>
-                                            <FiBookmark />
-                                            <span>{post.isSavedByMe ? 'Сохранен' : '—'}</span>
-                                        </Metric>
-                                    </Metrics>
+                                            <div>
+                                                <strong>@{post.author.nickname}</strong>
+                                                <span>Автор публикации</span>
+                                            </div>
+                                        </AuthorBlock>
 
-                                    <InfoList>
-                                        <InfoItem>
-                                            <strong>ID:</strong>
-                                            <span>{post.id}</span>
-                                        </InfoItem>
+                                        <InfoGrid>
+                                            <InfoItem>
+                                                <FiHeart />
+                                                <span>{post.likesCount} лайков</span>
+                                            </InfoItem>
 
-                                        <InfoItem>
-                                            <strong>Лента:</strong>
-                                            <span>
-                        {post.visibility === 'PREMIUM'
-                            ? 'Premium'
-                            : 'Обычная'}
-                      </span>
-                                        </InfoItem>
+                                            <InfoItem>
+                                                <FiAlertCircle />
+                                                <span>{post.dislikesCount} дизлайков</span>
+                                            </InfoItem>
 
-                                        <InfoItem>
-                                            <strong>Дата:</strong>
-                                            <span>
-                        <FiCalendar />
-                                                {new Date(post.createdAt).toLocaleDateString('ru-RU')}
-                      </span>
-                                        </InfoItem>
-                                    </InfoList>
+                                            <InfoItem>
+                                                <FiMessageCircle />
+                                                <span>{post.commentsCount} комментариев</span>
+                                            </InfoItem>
+                                        </InfoGrid>
 
-                                    <Actions>
-                                        <DeleteButton
-                                            type="button"
-                                            onClick={() => handleDeletePost(post.id)}
-                                        >
-                                            <FiTrash2 />
-                                            Удалить пост
-                                        </DeleteButton>
-                                    </Actions>
-                                </CardBody>
-                            </PostCard>
-                        );
-                    })}
-                </PostsGrid>
+                                        <Actions>
+                                            <OpenPostLink to={`/posts/${post.id}`}>
+                                                <FiExternalLink />
+                                                Открыть на сайте
+                                            </OpenPostLink>
+
+                                            <DeleteButton
+                                                type="button"
+                                                disabled={isDeleting}
+                                                onClick={() => handleDeletePost(post)}
+                                            >
+                                                <FiTrash2 />
+                                                {isDeleting ? 'Удаляем...' : 'Удалить'}
+                                            </DeleteButton>
+                                        </Actions>
+                                    </PostBody>
+                                </PostRow>
+                            );
+                        })}
+                    </PostsList>
+
+                    <LoadMoreAnchor ref={loadMoreRef}>
+                        {hasMore ? (
+                            <LoadingMore>
+                                <FiLoader />
+                                <span>Листайте ниже — посты подгрузятся автоматически</span>
+                            </LoadingMore>
+                        ) : (
+                            <EndMessage>
+                                Вы посмотрели все посты по текущим фильтрам
+                            </EndMessage>
+                        )}
+                    </LoadMoreAnchor>
+                </>
             ) : (
                 <EmptyCard>
-                    <FiAlertCircle />
-                    <h2>Посты не найдены</h2>
+                    <FiFileText />
+
+                    <h2>Постов не найдено</h2>
+
                     <p>
-                        Попробуйте сбросить фильтры, создать новый пост или принять заявку
-                        пользователя в админке.
+                        Создайте первый пост, одобрите пользовательскую заявку или измените
+                        текущие фильтры.
                     </p>
 
-                    <EmptyButton type="button" onClick={resetFilters}>
-                        Сбросить фильтры
-                    </EmptyButton>
+                    <Actions>
+                        <PrimaryLink to="/admin/posts/create">Создать пост</PrimaryLink>
+
+                        <PrimaryButton type="button" onClick={resetFilters}>
+                            Сбросить фильтры
+                        </PrimaryButton>
+                    </Actions>
                 </EmptyCard>
             )}
         </Page>
     );
 }
 
-function getSavedPosts(): Post[] {
-    const savedPosts = localStorage.getItem(MOCK_POSTS_KEY);
+function mergePostsKeepingOrder(first: Post[], second: Post[]) {
+    const map = new Map<number, Post>();
 
-    if (!savedPosts) {
-        return [];
-    }
+    [...first, ...second].forEach((post) => {
+        map.set(post.id, post);
+    });
 
-    try {
-        return JSON.parse(savedPosts) as Post[];
-    } catch {
-        localStorage.removeItem(MOCK_POSTS_KEY);
-        return [];
-    }
-}
-
-function removePostInteractions(postId: number) {
-    const savedInteractions = localStorage.getItem(MOCK_POST_INTERACTIONS_KEY);
-
-    if (!savedInteractions) {
-        return;
-    }
-
-    try {
-        const interactions = JSON.parse(savedInteractions) as MockPostInteractions;
-
-        const nextInteractions = Object.fromEntries(
-            Object.entries(interactions).map(([userId, userInteractions]) => {
-                const nextUserInteractions = { ...userInteractions };
-
-                delete nextUserInteractions[String(postId)];
-
-                return [userId, nextUserInteractions];
-            })
-        );
-
-        localStorage.setItem(
-            MOCK_POST_INTERACTIONS_KEY,
-            JSON.stringify(nextInteractions)
-        );
-    } catch {
-        localStorage.removeItem(MOCK_POST_INTERACTIONS_KEY);
-    }
+    return Array.from(map.values());
 }
 
 const Page = styled.div`
@@ -444,7 +491,7 @@ const Hero = styled.section`
   border-radius: ${({ theme }) => theme.radius.lg};
   background:
     radial-gradient(circle at top left, rgba(124, 58, 237, 0.24), transparent 34%),
-    radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.14), transparent 34%),
+    radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.16), transparent 34%),
     rgba(21, 25, 43, 0.86);
   display: flex;
   align-items: center;
@@ -479,491 +526,592 @@ const Title = styled.h1`
 `;
 
 const Subtitle = styled.p`
-  max-width: 720px;
+  max-width: 760px;
   margin: 12px 0 0;
   color: ${({ theme }) => theme.colors.textMuted};
   line-height: 1.65;
 `;
 
-const RefreshButton = styled.button`
+const HeroActions = styled.div`
   flex: 0 0 auto;
-  min-height: 46px;
-  padding: 0 16px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: ${({ theme }) => theme.radius.full};
-  background: rgba(255, 255, 255, 0.06);
-  color: ${({ theme }) => theme.colors.text};
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  display: flex;
+  flex-wrap: wrap;
   gap: 9px;
-  font-weight: 900;
+`;
 
-  &:hover {
-    background: rgba(255, 255, 255, 0.1);
-    border-color: rgba(139, 92, 246, 0.46);
-  }
+const CreateLink = styled(Link)`
+    min-height: 46px;
+    padding: 0 16px;
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: linear-gradient(135deg, #7c3aed, #2563eb);
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font-weight: 900;
+
+    &:hover {
+        filter: brightness(1.08);
+    }
+`;
+
+const RefreshButton = styled.button`
+    min-height: 46px;
+    padding: 0 16px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: rgba(255, 255, 255, 0.06);
+    color: ${({ theme }) => theme.colors.text};
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    font-weight: 900;
+
+    &:hover {
+        background: rgba(255, 255, 255, 0.1);
+        border-color: rgba(139, 92, 246, 0.46);
+    }
 `;
 
 const StatsGrid = styled.div`
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
 
-  @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+    @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
 
-  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-    grid-template-columns: 1fr;
-  }
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        grid-template-columns: 1fr;
+    }
 `;
 
 const StatCard = styled.article`
-  padding: 16px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: ${({ theme }) => theme.radius.lg};
-  background: rgba(21, 25, 43, 0.84);
-  display: flex;
-  align-items: center;
-  gap: 14px;
-`;
+    padding: 16px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: ${({ theme }) => theme.radius.lg};
+    background: rgba(21, 25, 43, 0.78);
+    display: flex;
+    align-items: center;
+    gap: 13px;
 
-const StatIcon = styled.div<{
-    $variant: 'blue' | 'pink' | 'purple' | 'red';
-}>`
-  flex: 0 0 auto;
-  width: 52px;
-  height: 52px;
-  border-radius: 19px;
-  color: white;
-  display: grid;
-  place-items: center;
-  font-size: 24px;
-  background: ${({ $variant }) => {
-    if ($variant === 'blue') {
-        return 'linear-gradient(135deg, #2563eb, #7c3aed)';
+    > svg {
+        width: 46px;
+        height: 46px;
+        padding: 12px;
+        border-radius: 17px;
+        background: rgba(124, 58, 237, 0.14);
+        color: ${({ theme }) => theme.colors.primaryHover};
     }
 
-    if ($variant === 'pink') {
-        return 'linear-gradient(135deg, #7c3aed, #ec4899)';
+    div {
+        min-width: 0;
+        display: grid;
+        gap: 2px;
     }
 
-    if ($variant === 'red') {
-        return 'linear-gradient(135deg, #ef4444, #7c3aed)';
+    strong {
+        font-size: 28px;
+        line-height: 1;
+        letter-spacing: -0.05em;
     }
 
-    return 'linear-gradient(135deg, #7c3aed, #2563eb)';
-}};
-`;
-
-const StatInfo = styled.div`
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-
-  strong {
-    font-size: 30px;
-    line-height: 1;
-    letter-spacing: -0.06em;
-  }
-
-  span {
-    color: ${({ theme }) => theme.colors.textMuted};
-    font-size: 13px;
-    font-weight: 800;
-  }
+    span {
+        color: ${({ theme }) => theme.colors.textMuted};
+        font-size: 13px;
+        font-weight: 800;
+    }
 `;
 
 const Toolbar = styled.div`
-  padding: 12px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: ${({ theme }) => theme.radius.lg};
-  background: rgba(21, 25, 43, 0.76);
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 12px;
+    padding: 12px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: ${({ theme }) => theme.radius.lg};
+    background: rgba(21, 25, 43, 0.76);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 10px;
 
-  @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
-    grid-template-columns: 1fr;
-  }
+    @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
+        grid-template-columns: 1fr;
+    }
 `;
 
 const SearchBox = styled.div`
-  min-width: 0;
-  height: 46px;
-  padding: 0 14px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: ${({ theme }) => theme.radius.full};
-  background: rgba(255, 255, 255, 0.045);
-  color: ${({ theme }) => theme.colors.textMuted};
-  display: flex;
-  align-items: center;
-  gap: 10px;
-
-  svg {
-    flex: 0 0 auto;
-    font-size: 18px;
-  }
-
-  input {
-    width: 100%;
     min-width: 0;
-    border: none;
-    outline: none;
-    background: transparent;
-    color: ${({ theme }) => theme.colors.text};
-  }
+    height: 46px;
+    padding: 0 14px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: rgba(255, 255, 255, 0.045);
+    color: ${({ theme }) => theme.colors.textMuted};
+    display: flex;
+    align-items: center;
+    gap: 10px;
 
-  input::placeholder {
-    color: rgba(156, 163, 183, 0.68);
-  }
+    svg {
+        flex: 0 0 auto;
+        font-size: 18px;
+    }
 
-  &:focus-within {
-    border-color: rgba(139, 92, 246, 0.7);
-    box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.13);
-  }
+    input {
+        width: 100%;
+        min-width: 0;
+        border: none;
+        outline: none;
+        background: transparent;
+        color: ${({ theme }) => theme.colors.text};
+    }
+
+    input::placeholder {
+        color: rgba(156, 163, 183, 0.68);
+    }
+
+    &:focus-within {
+        border-color: rgba(139, 92, 246, 0.72);
+        box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.12);
+    }
 `;
 
 const Filters = styled.div`
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+    display: flex;
+    gap: 8px;
 
-  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-    display: grid;
-    grid-template-columns: 1fr;
-  }
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        display: grid;
+        grid-template-columns: 1fr;
+    }
 `;
 
 const FilterSelect = styled.select`
-  min-height: 46px;
-  padding: 0 14px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: ${({ theme }) => theme.radius.full};
-  outline: none;
-  background: rgba(255, 255, 255, 0.055);
-  color: ${({ theme }) => theme.colors.text};
-  font-weight: 800;
+    min-height: 46px;
+    padding: 0 13px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: ${({ theme }) => theme.radius.full};
+    outline: none;
+    background: rgba(255, 255, 255, 0.055);
+    color: ${({ theme }) => theme.colors.text};
+    font-weight: 800;
 
-  option {
-    background: #101322;
-    color: white;
-  }
+    option {
+        background: #101322;
+        color: white;
+    }
 
-  &:focus {
-    border-color: rgba(139, 92, 246, 0.7);
-  }
+    &:focus {
+        border-color: rgba(139, 92, 246, 0.72);
+    }
 `;
 
 const ResetButton = styled.button`
-  min-height: 46px;
-  padding: 0 15px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: ${({ theme }) => theme.radius.full};
-  background: rgba(255, 255, 255, 0.055);
-  color: ${({ theme }) => theme.colors.text};
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  font-weight: 900;
+    min-height: 46px;
+    padding: 0 16px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: rgba(255, 255, 255, 0.055);
+    color: ${({ theme }) => theme.colors.text};
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    font-weight: 900;
 
-  &:hover {
-    background: rgba(255, 255, 255, 0.09);
-    border-color: rgba(139, 92, 246, 0.45);
-  }
+    &:hover {
+        background: rgba(255, 255, 255, 0.09);
+        border-color: rgba(139, 92, 246, 0.45);
+    }
 `;
 
-const PostsGrid = styled.div`
-  display: grid;
-  gap: 18px;
+const FeedMeta = styled.div`
+    padding: 0 4px;
+    color: ${({ theme }) => theme.colors.textMuted};
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 13px;
+    font-weight: 800;
+
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        align-items: flex-start;
+        flex-direction: column;
+    }
 `;
 
-const PostCard = styled.article`
-  overflow: hidden;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: ${({ theme }) => theme.radius.lg};
-  background: rgba(21, 25, 43, 0.86);
-  display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
+const LoadingInline = styled.div`
+    color: ${({ theme }) => theme.colors.primaryHover};
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
 
-  @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
-    grid-template-columns: 1fr;
-  }
+    svg {
+        animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+        to {
+            transform: rotate(360deg);
+        }
+    }
+`;
+
+const PostsList = styled.div`
+    display: grid;
+    gap: 14px;
+`;
+
+const PostRow = styled.article`
+    overflow: hidden;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: ${({ theme }) => theme.radius.lg};
+    background: rgba(21, 25, 43, 0.84);
+    display: grid;
+    grid-template-columns: 260px minmax(0, 1fr);
+
+    @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
+        grid-template-columns: 1fr;
+    }
 `;
 
 const Preview = styled.div`
-  position: relative;
-  min-height: 280px;
-  background: #05060d;
+    position: relative;
+    min-height: 230px;
+    background: #05060d;
 
-  img,
-  video {
-    width: 100%;
-    height: 100%;
-    min-height: 280px;
-    object-fit: cover;
-  }
+    img {
+        width: 100%;
+        height: 100%;
+        min-height: 230px;
+        object-fit: cover;
+        display: block;
+    }
 `;
 
 const VideoPreview = styled.div`
-  position: relative;
-  height: 100%;
-  min-height: 280px;
-
-  video {
-    filter: brightness(0.64);
-  }
-`;
-
-const VideoOverlay = styled.div`
-  position: absolute;
-  inset: 0;
-  color: white;
-  display: grid;
-  place-items: center;
-  align-content: center;
-  gap: 8px;
-  font-weight: 900;
-
-  svg {
-    font-size: 44px;
-  }
-`;
-
-const Placeholder = styled.div`
-  min-height: 280px;
-  padding: 24px;
-  background:
-    radial-gradient(circle at top left, rgba(124, 58, 237, 0.24), transparent 34%),
-    radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.16), transparent 34%),
-    #080a12;
-  color: ${({ theme }) => theme.colors.textMuted};
-  display: grid;
-  place-items: center;
-  align-content: center;
-  gap: 12px;
-  text-align: center;
-
-  svg {
+    min-height: 230px;
+    background:
+            radial-gradient(circle at top left, rgba(124, 58, 237, 0.28), transparent 34%),
+            radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.18), transparent 34%),
+            #080a12;
     color: ${({ theme }) => theme.colors.primaryHover};
-    font-size: 46px;
-  }
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    gap: 10px;
+    font-weight: 900;
 
-  span {
-    font-weight: 800;
-  }
+    svg {
+        font-size: 44px;
+    }
 `;
 
 const VisibilityBadge = styled.div<{ $visibility: PostVisibility }>`
-  position: absolute;
-  left: 14px;
-  top: 14px;
-  min-height: 36px;
-  padding: 0 12px;
-  border-radius: ${({ theme }) => theme.radius.full};
-  background: ${({ $visibility }) =>
-    $visibility === 'PREMIUM'
-        ? 'rgba(236, 72, 153, 0.86)'
-        : 'rgba(37, 99, 235, 0.86)'};
-  color: white;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 13px;
-  font-weight: 900;
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.3);
+    position: absolute;
+    left: 12px;
+    top: 12px;
+    min-height: 34px;
+    padding: 0 12px;
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: ${({ $visibility }) =>
+            $visibility === 'PREMIUM'
+                    ? 'rgba(236, 72, 153, 0.88)'
+                    : 'rgba(37, 99, 235, 0.88)'};
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 900;
 `;
 
-const CardBody = styled.div`
-  min-width: 0;
-  padding: 18px;
-  display: grid;
-  align-content: start;
-  gap: 14px;
+const PostBody = styled.div`
+    min-width: 0;
+    padding: 18px;
+    display: grid;
+    align-content: start;
+    gap: 14px;
 `;
 
-const CardHeader = styled.div`
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
+const PostTop = styled.div`
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
 
-  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-    flex-direction: column;
-  }
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        flex-direction: column;
+    }
+`;
+
+const PostTitleBlock = styled.div`
+    min-width: 0;
 `;
 
 const PostTitle = styled.h2`
-  margin: 0;
-  font-size: 25px;
-  letter-spacing: -0.055em;
+    margin: 0;
+    font-size: 25px;
+    letter-spacing: -0.055em;
 `;
 
-const Meta = styled.div`
-  margin-top: 5px;
-  color: ${({ theme }) => theme.colors.textMuted};
-  font-size: 13px;
-  font-weight: 700;
+const PostMeta = styled.div`
+    margin-top: 5px;
+    color: ${({ theme }) => theme.colors.textMuted};
+    font-size: 13px;
+    font-weight: 700;
 `;
 
 const MediaBadge = styled.div`
-  flex: 0 0 auto;
-  min-height: 36px;
-  padding: 0 12px;
-  border: 1px solid rgba(124, 58, 237, 0.32);
-  border-radius: ${({ theme }) => theme.radius.full};
-  background: rgba(124, 58, 237, 0.1);
-  color: #ddd6fe;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 13px;
-  font-weight: 900;
+    flex: 0 0 auto;
+    min-height: 36px;
+    padding: 0 12px;
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: rgba(124, 58, 237, 0.14);
+    color: #ddd6fe;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 900;
 `;
 
 const Description = styled.p`
-  margin: 0;
-  color: ${({ theme }) => theme.colors.textMuted};
-  line-height: 1.6;
+    margin: 0;
+    color: ${({ theme }) => theme.colors.textMuted};
+    line-height: 1.6;
+    white-space: pre-wrap;
 `;
 
-const Metrics = styled.div`
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+const DescriptionMuted = styled(Description)`
+    opacity: 0.68;
+    font-style: italic;
 `;
 
-const Metric = styled.div`
-  min-height: 36px;
-  padding: 0 11px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: ${({ theme }) => theme.radius.full};
-  background: rgba(255, 255, 255, 0.04);
-  color: ${({ theme }) => theme.colors.text};
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 13px;
-  font-weight: 900;
+const AuthorBlock = styled.div`
+    padding: 10px 12px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.035);
+    display: flex;
+    align-items: center;
+    gap: 10px;
 
-  svg {
-    color: ${({ theme }) => theme.colors.primaryHover};
-  }
+    div {
+        min-width: 0;
+        display: grid;
+        gap: 2px;
+    }
+
+    strong {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    span {
+        color: ${({ theme }) => theme.colors.textMuted};
+        font-size: 12px;
+        font-weight: 800;
+    }
 `;
 
-const InfoList = styled.div`
-  display: grid;
-  gap: 8px;
+const AuthorAvatar = styled.div`
+    flex: 0 0 auto;
+    width: 42px;
+    height: 42px;
+    overflow: hidden;
+    border-radius: 15px;
+    background: linear-gradient(135deg, #7c3aed, #2563eb);
+    color: white;
+    display: grid;
+    place-items: center;
+    font-size: 20px;
+
+    img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+`;
+
+const InfoGrid = styled.div`
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
 `;
 
 const InfoItem = styled.div`
-  padding: 10px 12px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.035);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-
-  strong {
-    color: ${({ theme }) => theme.colors.text};
-    font-size: 13px;
-  }
-
-  span {
-    min-width: 0;
+    min-height: 36px;
+    padding: 0 11px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: rgba(255, 255, 255, 0.04);
     color: ${({ theme }) => theme.colors.textMuted};
     display: inline-flex;
     align-items: center;
     gap: 7px;
     font-size: 13px;
-    font-weight: 700;
-    text-align: right;
-    word-break: break-word;
-  }
+    font-weight: 800;
 
-  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 5px;
-
-    span {
-      text-align: left;
+    svg {
+        color: ${({ theme }) => theme.colors.primaryHover};
     }
-  }
 `;
 
 const Actions = styled.div`
-  display: flex;
-  flex-wrap: wrap;
-  gap: 9px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 9px;
+`;
+
+const OpenPostLink = styled(Link)`
+    min-height: 42px;
+    padding: 0 14px;
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: linear-gradient(135deg, #7c3aed, #2563eb);
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 900;
+
+    &:hover {
+        filter: brightness(1.08);
+    }
 `;
 
 const DeleteButton = styled.button`
-  min-height: 44px;
-  padding: 0 14px;
-  border: 1px solid rgba(239, 68, 68, 0.32);
-  border-radius: ${({ theme }) => theme.radius.full};
-  background: rgba(239, 68, 68, 0.12);
-  color: #fecaca;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 900;
+    min-height: 42px;
+    padding: 0 14px;
+    border: 1px solid rgba(239, 68, 68, 0.32);
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: rgba(239, 68, 68, 0.1);
+    color: #fecaca;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 900;
 
-  &:hover {
-    background: rgba(239, 68, 68, 0.18);
-  }
+    &:hover:not(:disabled) {
+        background: rgba(239, 68, 68, 0.16);
+    }
+
+    &:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+`;
+
+const LoadMoreAnchor = styled.div`
+    min-height: 80px;
+    display: grid;
+    place-items: center;
+`;
+
+const LoadingMore = styled.div`
+    padding: 12px 16px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: rgba(255, 255, 255, 0.045);
+    color: ${({ theme }) => theme.colors.textMuted};
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 13px;
+    font-weight: 900;
+
+    svg {
+        color: ${({ theme }) => theme.colors.primaryHover};
+        animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+        to {
+            transform: rotate(360deg);
+        }
+    }
+`;
+
+const EndMessage = styled.div`
+    color: ${({ theme }) => theme.colors.textMuted};
+    font-size: 13px;
+    font-weight: 800;
 `;
 
 const EmptyCard = styled.section`
-  min-height: 420px;
-  padding: 30px 22px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: ${({ theme }) => theme.radius.lg};
-  background:
-    radial-gradient(circle at top left, rgba(124, 58, 237, 0.2), transparent 34%),
-    rgba(21, 25, 43, 0.86);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
+    min-height: 420px;
+    padding: 30px 22px;
+    border: 1px dashed rgba(139, 92, 246, 0.34);
+    border-radius: ${({ theme }) => theme.radius.lg};
+    background:
+            radial-gradient(circle at top left, rgba(124, 58, 237, 0.18), transparent 34%),
+            rgba(21, 25, 43, 0.74);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
 
-  > svg {
-    margin-bottom: 16px;
-    color: ${({ theme }) => theme.colors.primaryHover};
-    font-size: 44px;
-  }
+    > svg {
+        margin-bottom: 16px;
+        color: ${({ theme }) => theme.colors.primaryHover};
+        font-size: 44px;
+    }
 
-  h2 {
-    margin: 0 0 10px;
-    font-size: clamp(26px, 4vw, 40px);
-    letter-spacing: -0.06em;
-  }
+    h2 {
+        margin: 0 0 10px;
+        font-size: clamp(26px, 4vw, 40px);
+        letter-spacing: -0.06em;
+    }
 
-  p {
-    max-width: 500px;
-    margin: 0;
-    color: ${({ theme }) => theme.colors.textMuted};
-    line-height: 1.6;
-  }
+    p {
+        max-width: 520px;
+        margin: 0;
+        color: ${({ theme }) => theme.colors.textMuted};
+        line-height: 1.6;
+    }
 `;
 
-const EmptyButton = styled.button`
-  min-height: 46px;
-  margin-top: 22px;
-  padding: 0 16px;
-  border: none;
-  border-radius: ${({ theme }) => theme.radius.full};
-  background: linear-gradient(135deg, #7c3aed, #2563eb);
-  color: white;
-  font-weight: 900;
+const StateCard = styled(EmptyCard)`
+    > svg {
+        animation: spin 0.8s linear infinite;
+    }
 
-  &:hover {
-    filter: brightness(1.08);
-  }
+    @keyframes spin {
+        to {
+            transform: rotate(360deg);
+        }
+    }
+`;
+
+const PrimaryButton = styled.button`
+    min-height: 46px;
+    margin-top: 22px;
+    padding: 0 16px;
+    border: none;
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: linear-gradient(135deg, #7c3aed, #2563eb);
+    color: white;
+    font-weight: 900;
+
+    &:hover {
+        filter: brightness(1.08);
+    }
+`;
+
+const PrimaryLink = styled(Link)`
+    min-height: 46px;
+    margin-top: 22px;
+    padding: 0 16px;
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: linear-gradient(135deg, #7c3aed, #2563eb);
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    font-weight: 900;
+
+    &:hover {
+        filter: brightness(1.08);
+    }
 `;

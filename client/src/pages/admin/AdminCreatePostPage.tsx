@@ -1,4 +1,5 @@
-import { ChangeEvent, FormEvent, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import type {ChangeEvent, FormEvent} from 'react';
 import { useSelector } from 'react-redux';
 import styled from 'styled-components';
 import {
@@ -19,14 +20,9 @@ import {
 import type { RootState } from '../../app/store';
 import type {
   MediaType,
-  Post,
   PostVisibility,
 } from '../../entities/post/model/postTypes';
-import {
-  createMockImageUrl,
-  getMockPosts,
-  saveMockPosts,
-} from '../../shared/lib/mockStorage';
+import { useCreateAdminPostMutation } from '../../entities/admin/api/adminPostApi';
 
 type FormStatus = 'idle' | 'success' | 'error';
 
@@ -36,13 +32,13 @@ interface SelectedFileState {
   previewUrl: string | null;
 }
 
-const MOCK_VIDEO_URL =
-    'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4';
-
 export function AdminCreatePostPage() {
   const user = useSelector((state: RootState) => state.auth.user);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const [createAdminPost, { isLoading: isSubmitting }] =
+      useCreateAdminPostMutation();
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -55,12 +51,12 @@ export function AdminCreatePostPage() {
 
   const canSubmit = useMemo(() => {
     return (
-        Boolean(user) &&
+        user?.role === 'ADMIN' &&
         title.trim().length >= 3 &&
-        description.trim().length >= 10 &&
-        Boolean(selectedFile)
+        Boolean(selectedFile) &&
+        !isSubmitting
     );
-  }, [description, selectedFile, title, user]);
+  }, [isSubmitting, selectedFile, title, user]);
 
   const handlePickFile = () => {
     fileInputRef.current?.click();
@@ -150,7 +146,7 @@ export function AdminCreatePostPage() {
     }
   };
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
     setStatus('idle');
@@ -174,61 +170,32 @@ export function AdminCreatePostPage() {
       return;
     }
 
-    if (description.trim().length < 10) {
-      setStatus('error');
-      setMessage('Описание должно содержать минимум 10 символов.');
-      return;
-    }
-
     if (!selectedFile) {
       setStatus('error');
       setMessage('Выберите фото или видео для публикации.');
       return;
     }
 
-    const postId = Date.now();
+    try {
+      await createAdminPost({
+        title: title.trim(),
+        description: description.trim() || '',
+        visibility,
+        file: selectedFile.file,
+      }).unwrap();
 
-    const newPost: Post = {
-      id: postId,
-      title: title.trim(),
-      description: description.trim(),
-      visibility,
-      media: [
-        {
-          id: postId,
-          type: selectedFile.mediaType,
-          url:
-              selectedFile.mediaType === 'IMAGE'
-                  ? selectedFile.previewUrl || createMockImageUrl(title.trim())
-                  : MOCK_VIDEO_URL,
-        },
-      ],
-      author: {
-        id: user.id,
-        nickname: user.nickname,
-        avatarUrl: user.avatarUrl || null,
-      },
-      likesCount: 0,
-      dislikesCount: 0,
-      commentsCount: 0,
-      isLikedByMe: false,
-      isDislikedByMe: false,
-      isSavedByMe: false,
-      createdAt: new Date().toISOString(),
-    };
+      setStatus('success');
+      setMessage(
+          visibility === 'PREMIUM'
+              ? 'Premium-пост опубликован.'
+              : 'Публичный пост опубликован.'
+      );
 
-    const currentPosts = getMockPosts();
-
-    saveMockPosts([newPost, ...currentPosts]);
-
-    setStatus('success');
-    setMessage(
-        visibility === 'PREMIUM'
-            ? 'Premium-пост опубликован.'
-            : 'Публичный пост опубликован.'
-    );
-
-    resetForm();
+      resetForm();
+    } catch {
+      setStatus('error');
+      setMessage('Не удалось создать пост. Попробуйте еще раз.');
+    }
   };
 
   return (
@@ -241,8 +208,8 @@ export function AdminCreatePostPage() {
 
             <Subtitle>
               Администратор может напрямую опубликовать фото или видео в обычную
-              ленту либо в Premium. Пользовательские заявки публикуются отдельно
-              через раздел заявок.
+              ленту либо в Premium. Создание теперь идет через admin API-слой,
+              который позже подключим к backend.
             </Subtitle>
           </HeroContent>
 
@@ -274,7 +241,7 @@ export function AdminCreatePostPage() {
                   id="post-description"
                   value={description}
                   maxLength={1200}
-                  placeholder="Добавьте описание публикации..."
+                  placeholder="Описание можно оставить пустым..."
                   onChange={(event) => setDescription(event.target.value)}
               />
 
@@ -330,17 +297,19 @@ export function AdminCreatePostPage() {
                     <strong>Выберите фото или видео</strong>
 
                     <span>
-                  Фото до 8 MB или видео до 40 MB. В mock-режиме изображения
-                  сохраняются как base64-preview, а видео временно заменяется
-                  тестовым роликом.
-                </span>
+                      Фото до 8 MB или видео до 40 MB. Файл отправится на backend через
+                      FormData в поле media.
+                    </span>
                   </UploadZone>
               ) : (
                   <SelectedFile>
                     <PreviewBox>
                       {selectedFile.mediaType === 'IMAGE' ? (
                           selectedFile.previewUrl ? (
-                              <img src={selectedFile.previewUrl} alt={selectedFile.file.name} />
+                              <img
+                                  src={selectedFile.previewUrl}
+                                  alt={selectedFile.file.name}
+                              />
                           ) : (
                               <PreviewPlaceholder>
                                 <FiImage />
@@ -381,7 +350,7 @@ export function AdminCreatePostPage() {
 
             <SubmitButton type="submit" disabled={!canSubmit}>
               <FiSend />
-              Опубликовать
+              {isSubmitting ? 'Публикуем...' : 'Опубликовать'}
             </SubmitButton>
           </FormCard>
 
@@ -392,9 +361,9 @@ export function AdminCreatePostPage() {
               <h2>Что сохраняется</h2>
 
               <Text>
-                Пост попадает в mock-хранилище `pulsefeed_mock_posts`.
-                Изображение сохраняется прямо в localStorage как preview. Для
-                видео пока используется тестовый URL, чтобы не перегружать браузер.
+                Пост создается через `useCreateAdminPostMutation`. Сейчас mutation
+                работает с mock-хранилищем, а после подключения backend будет
+                отправлять данные на `/admin/posts`.
               </Text>
             </InfoCard>
 
@@ -404,8 +373,8 @@ export function AdminCreatePostPage() {
               <h2>После публикации</h2>
 
               <Text>
-                Пост сразу появится в обычной или Premium-ленте. Его можно будет
-                лайкать, дизлайкать, сохранять и комментировать.
+                Пост сразу появится в обычной или Premium-ленте. Ленты обновляются
+                автоматически и подгружают публикации частями.
               </Text>
             </InfoCard>
           </SidePanel>

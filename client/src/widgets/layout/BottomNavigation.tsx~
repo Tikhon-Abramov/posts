@@ -1,4 +1,4 @@
-import { MouseEvent, useEffect, useMemo, useState } from 'react';
+import type { MouseEvent } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import styled from 'styled-components';
@@ -14,68 +14,23 @@ import {
 
 import type { AppDispatch, RootState } from '../../app/store';
 import { openAuthModal } from '../../entities/auth/slice/authSlice';
+import { useGetNotificationsStatsQuery } from '../../entities/notification/api/notificationApi';
 
-type NotificationType =
-    | 'REQUEST_APPROVED'
-    | 'REQUEST_REJECTED'
-    | 'NEW_LIKE'
-    | 'NEW_COMMENT';
-
-interface MockNotification {
-    id: number;
-    userId: number;
-    type: NotificationType;
-    title: string;
-    text: string;
-    isRead: boolean;
-    postId?: number | null;
-    requestId?: number | null;
-    createdAt: string;
-}
-
-const MOCK_NOTIFICATIONS_KEY = 'pulsefeed_mock_notifications';
+const NOTIFICATIONS_STATS_POLLING_INTERVAL = 8000;
 
 export function BottomNavigation() {
     const dispatch = useDispatch<AppDispatch>();
 
     const { accessToken, user } = useSelector((state: RootState) => state.auth);
 
-    const [notifications, setNotifications] = useState<MockNotification[]>([]);
-
     const isAuth = Boolean(accessToken);
 
-    const unreadNotificationsCount = useMemo(() => {
-        if (!user) {
-            return 0;
-        }
+    const { data: notificationsStats } = useGetNotificationsStatsQuery(undefined, {
+        skip: !isAuth,
+        pollingInterval: NOTIFICATIONS_STATS_POLLING_INTERVAL,
+    });
 
-        return notifications.filter(
-            (notification) => notification.userId === user.id && !notification.isRead
-        ).length;
-    }, [notifications, user]);
-
-    useEffect(() => {
-        const loadNotifications = () => {
-            setNotifications(getSavedNotifications());
-        };
-
-        loadNotifications();
-
-        const intervalId = window.setInterval(loadNotifications, 1200);
-
-        const handleStorageChange = (event: StorageEvent) => {
-            if (event.key === MOCK_NOTIFICATIONS_KEY) {
-                loadNotifications();
-            }
-        };
-
-        window.addEventListener('storage', handleStorageChange);
-
-        return () => {
-            window.clearInterval(intervalId);
-            window.removeEventListener('storage', handleStorageChange);
-        };
-    }, []);
+    const unreadNotificationsCount = notificationsStats?.unread || 0;
 
     const handleProtectedClick = (
         event: MouseEvent<HTMLAnchorElement>,
@@ -193,54 +148,39 @@ export function BottomNavigation() {
     );
 }
 
-function getSavedNotifications(): MockNotification[] {
-    const savedNotifications = localStorage.getItem(MOCK_NOTIFICATIONS_KEY);
-
-    if (!savedNotifications) {
-        return [];
-    }
-
-    try {
-        return JSON.parse(savedNotifications) as MockNotification[];
-    } catch {
-        localStorage.removeItem(MOCK_NOTIFICATIONS_KEY);
-        return [];
-    }
-}
-
 const NavWrapper = styled.div`
-  display: none;
+    display: none;
 
-  @media (max-width: ${({ theme }) => theme.breakpoints.tablet}) {
-    position: fixed;
-    left: 10px;
-    right: 10px;
-    bottom: 10px;
-    z-index: 30;
-    height: 70px;
-    padding: 8px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: 24px;
-    background: rgba(16, 19, 34, 0.92);
-    backdrop-filter: blur(18px);
-    box-shadow: 0 18px 40px ${({ theme }) => theme.colors.shadow};
-    display: block;
-    overflow-x: auto;
-    overflow-y: hidden;
+    @media (max-width: ${({ theme }) => theme.breakpoints.tablet}) {
+        position: fixed;
+        left: 10px;
+        right: 10px;
+        bottom: 10px;
+        z-index: 30;
+        height: 70px;
+        padding: 8px;
+        border: 1px solid ${({ theme }) => theme.colors.border};
+        border-radius: 24px;
+        background: rgba(16, 19, 34, 0.92);
+        backdrop-filter: blur(18px);
+        box-shadow: 0 18px 40px ${({ theme }) => theme.colors.shadow};
+        display: block;
+        overflow-x: auto;
+        overflow-y: hidden;
 
-    scrollbar-width: none;
+        scrollbar-width: none;
 
-    &::-webkit-scrollbar {
-      display: none;
+        &::-webkit-scrollbar {
+            display: none;
+        }
     }
-  }
 `;
 
 const Nav = styled.nav`
-  min-width: max-content;
-  height: 100%;
-  display: flex;
-  gap: 5px;
+    min-width: max-content;
+    height: 100%;
+    display: flex;
+    gap: 5px;
 `;
 
 const Item = styled(NavLink)`

@@ -1,70 +1,120 @@
 import { createSlice } from '@reduxjs/toolkit';
 import type { PayloadAction } from '@reduxjs/toolkit';
-import type { AuthState, AuthUser } from '../model/authTypes';
 
-export type AuthModalMode = 'login' | 'register';
+import type { AuthResponse, AuthUser } from '../model/authTypes';
+
+type AuthModalMode = 'login' | 'register';
 
 interface OpenAuthModalPayload {
   mode?: AuthModalMode;
-  reason?: string;
+  reason?: string | null;
 }
+
+interface AuthModalState {
+  isOpen: boolean;
+  mode: AuthModalMode;
+  reason: string | null;
+}
+
+interface AuthState {
+  user: AuthUser | null;
+  accessToken: string | null;
+
+  /**
+   * Новый формат, который используем дальше.
+   */
+  isAuthModalOpen: boolean;
+  authModalMode: AuthModalMode;
+  authModalReason: string | null;
+
+  /**
+   * Совместимость со старыми компонентами,
+   * где еще может быть state.auth.authModal.isOpen.
+   */
+  authModal: AuthModalState;
+}
+
+const initialAuthModal: AuthModalState = {
+  isOpen: false,
+  mode: 'login',
+  reason: null,
+};
 
 const initialState: AuthState = {
   user: null,
   accessToken: localStorage.getItem('accessToken'),
 
-  authModal: {
-    isOpen: false,
-    mode: 'login',
-    reason: null,
-  },
+  isAuthModalOpen: initialAuthModal.isOpen,
+  authModalMode: initialAuthModal.mode,
+  authModalReason: initialAuthModal.reason,
+
+  authModal: initialAuthModal,
 };
 
-const authSlice = createSlice({
+export const authSlice = createSlice({
   name: 'auth',
+
   initialState,
+
   reducers: {
-    setCredentials: (
-        state,
-        action: PayloadAction<{ user: AuthUser; accessToken: string }>
-    ) => {
+    setCredentials(state, action: PayloadAction<AuthResponse>) {
       state.user = action.payload.user;
       state.accessToken = action.payload.accessToken;
-      state.authModal.isOpen = false;
-      state.authModal.reason = null;
 
       localStorage.setItem('accessToken', action.payload.accessToken);
     },
 
-    setUser: (state, action: PayloadAction<AuthUser>) => {
+    setUser(state, action: PayloadAction<AuthUser | null>) {
       state.user = action.payload;
     },
 
-    logout: (state) => {
+    clearCredentials(state) {
       state.user = null;
       state.accessToken = null;
-      state.authModal.isOpen = false;
-      state.authModal.reason = null;
 
       localStorage.removeItem('accessToken');
     },
 
-    openAuthModal: (
-        state,
-        action: PayloadAction<OpenAuthModalPayload | undefined>
-    ) => {
-      state.authModal.isOpen = true;
-      state.authModal.mode = action.payload?.mode || 'login';
-      state.authModal.reason = action.payload?.reason || null;
+    logout(state) {
+      state.user = null;
+      state.accessToken = null;
+
+      localStorage.removeItem('accessToken');
     },
 
-    closeAuthModal: (state) => {
-      state.authModal.isOpen = false;
-      state.authModal.reason = null;
+    openAuthModal(state, action: PayloadAction<OpenAuthModalPayload | undefined>) {
+      const mode = action.payload?.mode || 'login';
+      const reason = action.payload?.reason || null;
+
+      state.isAuthModalOpen = true;
+      state.authModalMode = mode;
+      state.authModalReason = reason;
+
+      state.authModal = {
+        isOpen: true,
+        mode,
+        reason,
+      };
     },
 
-    switchAuthModalMode: (state, action: PayloadAction<AuthModalMode>) => {
-      state.authModal.mode = action.payload;
+    closeAuthModal(state) {
+      state.isAuthModalOpen = false;
+      state.authModalReason = null;
+
+      state.authModal = {
+        ...state.authModal,
+        isOpen: false,
+        reason: null,
+      };
+    },
+
+    switchAuthModalMode(state, action: PayloadAction<AuthModalMode>) {
+      state.authModalMode = action.payload;
+
+      state.authModal = {
+        ...state.authModal,
+        mode: action.payload,
+      };
     },
   },
 });
@@ -72,10 +122,11 @@ const authSlice = createSlice({
 export const {
   setCredentials,
   setUser,
+  clearCredentials,
   logout,
   openAuthModal,
   closeAuthModal,
   switchAuthModalMode,
 } = authSlice.actions;
 
-export default authSlice.reducer;
+export const authReducer = authSlice.reducer;
