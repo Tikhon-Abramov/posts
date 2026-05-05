@@ -204,9 +204,12 @@ export function Sidebar() {
 const Aside = styled.aside`
     position: sticky;
     top: 16px;
-    height: calc(100vh - 32px);
+    flex: 0 0 280px;
+    width: 280px;
     min-width: 280px;
     max-width: 280px;
+    height: calc(100vh - 32px);
+    box-sizing: border-box;
     padding: 16px;
     border: 1px solid ${({ theme }) => theme.colors.border};
     border-radius: ${({ theme }) => theme.radius.lg};
@@ -217,6 +220,8 @@ const Aside = styled.aside`
     display: flex;
     flex-direction: column;
     gap: 16px;
+    align-self: flex-start;
+    z-index: 1;
 
     @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
         display: none;

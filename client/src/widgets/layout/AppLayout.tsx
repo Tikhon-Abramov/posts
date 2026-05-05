@@ -1,45 +1,58 @@
+import type { ReactNode } from 'react';
 import { Outlet } from 'react-router-dom';
 import styled from 'styled-components';
-import { Header } from './Header';
-import { BottomNavigation } from './BottomNavigation';
+
 import { Sidebar } from './Sidebar';
+import { BottomNavigation } from './BottomNavigation';
 
-export function AppLayout() {
-  return (
-    <Page>
-      <Header />
-
-      <Content>
-        <Sidebar />
-
-        <Main>
-          <Outlet />
-        </Main>
-      </Content>
-
-      <BottomNavigation />
-    </Page>
-  );
+interface AppLayoutProps {
+    children?: ReactNode;
 }
 
-const Page = styled.div`
-  min-height: 100vh;
+export function AppLayout({ children }: AppLayoutProps) {
+    return (
+        <PageShell>
+            <ContentShell>
+                <Sidebar />
+
+                <MainContent>
+                    {children || <Outlet />}
+                </MainContent>
+            </ContentShell>
+
+            <BottomNavigation />
+        </PageShell>
+    );
+}
+
+const PageShell = styled.div`
+    min-height: 100vh;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 16px;
+
+    @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
+        padding: 12px 12px 96px;
+    }
 `;
 
-const Content = styled.div`
-  width: min(1180px, 100%);
-  margin: 0 auto;
-  padding: 18px 16px 90px;
-  display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
-  gap: 24px;
+const ContentShell = styled.div`
+    width: min(100%, 1480px);
+    margin: 0 auto;
+    display: flex;
+    align-items: flex-start;
+    gap: 18px;
 
-  @media (max-width: ${({ theme }) => theme.breakpoints.tablet}) {
-    display: block;
-    padding: 14px 12px 86px;
-  }
+    @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
+        display: block;
+    }
 `;
 
-const Main = styled.main`
-  min-width: 0;
+const MainContent = styled.main`
+    min-width: 0;
+    width: 100%;
+    flex: 1 1 auto;
+    box-sizing: border-box;
+    display: grid;
+    gap: 18px;
 `;

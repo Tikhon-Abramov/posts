@@ -106,7 +106,7 @@ function mapContentRequestRow(row) {
 }
 
 function buildCursorCondition({ cursor, params }) {
-    if (!cursor || cursor === 'null' || cursor === 'undefined') {
+    if (!cursor) {
         return '';
     }
 
@@ -186,33 +186,33 @@ async function createContentRequest({ viewer, payload, file }) {
 
     const [result] = await pool.execute(
         `
-            INSERT INTO content_requests (
-                user_id,
-                title,
-                description,
-                suggested_visibility,
-                media_type,
-                file_name,
-                file_url,
-                file_size,
-                status,
-                reviewed_at,
-                published_post_id
-            )
-            VALUES (
-                       :userId,
-                       :title,
-                       :description,
-                       :suggestedVisibility,
-                       :mediaType,
-                       :fileName,
-                       :fileUrl,
-                       :fileSize,
-                       'PENDING',
-                       NULL,
-                       NULL
-                   )
-        `,
+      INSERT INTO content_requests (
+        user_id,
+        title,
+        description,
+        suggested_visibility,
+        media_type,
+        file_name,
+        file_url,
+        file_size,
+        status,
+        reviewed_at,
+        published_post_id
+      )
+      VALUES (
+        :userId,
+        :title,
+        :description,
+        :suggestedVisibility,
+        :mediaType,
+        :fileName,
+        :fileUrl,
+        :fileSize,
+        'PENDING',
+        NULL,
+        NULL
+      )
+    `,
         {
             userId: viewer.id,
             title,
@@ -234,27 +234,27 @@ async function createContentRequest({ viewer, payload, file }) {
 async function getContentRequestById({ userId, requestId }) {
     const [rows] = await pool.execute(
         `
-            SELECT
-                cr.id,
-                cr.user_id,
-                u.nickname AS user_nickname,
-                cr.title,
-                cr.description,
-                cr.suggested_visibility,
-                cr.media_type,
-                cr.file_name,
-                cr.file_url,
-                cr.file_size,
-                cr.status,
-                cr.reviewed_at,
-                cr.published_post_id,
-                cr.created_at
-            FROM content_requests cr
-                     INNER JOIN users u ON u.id = cr.user_id
-            WHERE cr.id = :requestId
-              AND cr.user_id = :userId
-                LIMIT 1
-        `,
+      SELECT
+        cr.id,
+        cr.user_id,
+        u.nickname AS user_nickname,
+        cr.title,
+        cr.description,
+        cr.suggested_visibility,
+        cr.media_type,
+        cr.file_name,
+        cr.file_url,
+        cr.file_size,
+        cr.status,
+        cr.reviewed_at,
+        cr.published_post_id,
+        cr.created_at
+      FROM content_requests cr
+      INNER JOIN users u ON u.id = cr.user_id
+      WHERE cr.id = :requestId
+        AND cr.user_id = :userId
+      LIMIT 1
+    `,
         {
             requestId,
             userId,
@@ -270,10 +270,10 @@ async function getContentRequestById({ userId, requestId }) {
 
 async function getMyContentRequests({ viewer, query }) {
     const limit = parseLimit(query.limit);
-    const sqlLimit = limit + 1;
 
     const params = {
         userId: viewer.id,
+        limit: limit + 1,
     };
 
     const searchCondition = buildSearchCondition({
@@ -321,7 +321,7 @@ async function getMyContentRequests({ viewer, query }) {
         ${mediaCondition}
         ${cursorCondition}
       ORDER BY cr.created_at DESC, cr.id DESC
-      LIMIT ${sqlLimit}
+      LIMIT :limit
     `,
         params
     );
@@ -332,16 +332,16 @@ async function getMyContentRequests({ viewer, query }) {
 async function getMyContentRequestsStats(userId) {
     const [rows] = await pool.execute(
         `
-            SELECT
-                COUNT(*) AS total,
-                SUM(CASE WHEN status = 'PENDING' THEN 1 ELSE 0 END) AS pending,
-                SUM(CASE WHEN status = 'APPROVED' THEN 1 ELSE 0 END) AS approved,
-                SUM(CASE WHEN status = 'REJECTED' THEN 1 ELSE 0 END) AS rejected,
-                SUM(CASE WHEN media_type = 'IMAGE' THEN 1 ELSE 0 END) AS images_count,
-                SUM(CASE WHEN media_type = 'VIDEO' THEN 1 ELSE 0 END) AS videos_count
-            FROM content_requests
-            WHERE user_id = :userId
-        `,
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN status = 'PENDING' THEN 1 ELSE 0 END) AS pending,
+        SUM(CASE WHEN status = 'APPROVED' THEN 1 ELSE 0 END) AS approved,
+        SUM(CASE WHEN status = 'REJECTED' THEN 1 ELSE 0 END) AS rejected,
+        SUM(CASE WHEN media_type = 'IMAGE' THEN 1 ELSE 0 END) AS images_count,
+        SUM(CASE WHEN media_type = 'VIDEO' THEN 1 ELSE 0 END) AS videos_count
+      FROM content_requests
+      WHERE user_id = :userId
+    `,
         {
             userId,
         }

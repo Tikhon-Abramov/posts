@@ -220,7 +220,7 @@ export function PostCard({ post }: PostCardProps) {
                         <span>{post.dislikesCount}</span>
                     </ActionButton>
 
-                    <CommentsLink to={`/posts/${post.id}`}>
+                    <CommentsLink to={`/posts/${post.id}#comments`}>
                         <FiMessageCircle />
                         <span>{post.commentsCount}</span>
                     </CommentsLink>
@@ -254,39 +254,39 @@ function getErrorMessage(error: unknown, fallback: string) {
 }
 
 const Card = styled.article`
-  overflow: hidden;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: ${({ theme }) => theme.radius.lg};
-  background: rgba(21, 25, 43, 0.84);
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.18);
+    overflow: hidden;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: ${({ theme }) => theme.radius.lg};
+    background: rgba(21, 25, 43, 0.84);
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.18);
 `;
 
 const MediaLink = styled(Link)`
-  position: relative;
-  overflow: hidden;
-  min-height: 320px;
-  background: #05060d;
-  display: block;
+    position: relative;
+    overflow: hidden;
+    min-height: 320px;
+    background: #05060d;
+    display: block;
 
-  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-    min-height: 240px;
-  }
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        min-height: 240px;
+    }
 `;
 
 const MediaImage = styled.img`
-  width: 100%;
-  height: 420px;
-  object-fit: cover;
-  display: block;
-  transition: transform 0.25s ease;
+    width: 100%;
+    height: 420px;
+    object-fit: cover;
+    display: block;
+    transition: transform 0.25s ease;
 
-  ${MediaLink}:hover & {
-    transform: scale(1.025);
-  }
+    ${MediaLink}:hover & {
+        transform: scale(1.025);
+    }
 
-  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-    height: 280px;
-  }
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        height: 280px;
+    }
 `;
 
 const MediaVideo = styled.video`
