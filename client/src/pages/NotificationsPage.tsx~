@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+/* eslint-disable react-hooks/set-state-in-effect */
+
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import styled from 'styled-components';
 import {
@@ -31,6 +33,7 @@ const STATS_POLLING_INTERVAL = 8000;
 
 export function NotificationsPage() {
     const loadMoreRef = useRef<HTMLDivElement | null>(null);
+    const isFilterMountedRef = useRef(false);
 
     const [filter, setFilter] = useState<NotificationFilter>('ALL');
     const [cursor, setCursor] = useState<string | null>(null);
@@ -46,11 +49,19 @@ export function NotificationsPage() {
         isFetching,
         isError,
         refetch: refetchNotifications,
-    } = useGetNotificationsQuery({
-        cursor,
-        limit: NOTIFICATIONS_LIMIT,
-        filter,
-    });
+    } = useGetNotificationsQuery(
+        {
+            cursor: cursor || undefined,
+            limit: NOTIFICATIONS_LIMIT,
+            filter,
+        },
+        {
+            refetchOnMountOrArgChange: true,
+            pollingInterval: STATS_POLLING_INTERVAL,
+            refetchOnFocus: true,
+            refetchOnReconnect: true,
+        }
+    );
 
     const {
         data: stats,
@@ -58,6 +69,9 @@ export function NotificationsPage() {
         refetch: refetchStats,
     } = useGetNotificationsStatsQuery(undefined, {
         pollingInterval: STATS_POLLING_INTERVAL,
+        refetchOnMountOrArgChange: true,
+        refetchOnFocus: true,
+        refetchOnReconnect: true,
     });
 
     const [markAllNotificationsAsRead] = useMarkAllNotificationsAsReadMutation();
@@ -66,8 +80,27 @@ export function NotificationsPage() {
     const [clearNotifications, { isLoading: isClearing }] =
         useClearNotificationsMutation();
 
-    const isFirstLoading = isLoading && loadedNotifications.length === 0;
-    const isLoadingMore = isFetching && loadedNotifications.length > 0;
+    const dataNotifications = useMemo(() => {
+        return data?.items || data?.notifications || [];
+    }, [data]);
+
+    const visibleNotifications = useMemo(() => {
+        if (loadedNotifications.length) {
+            return loadedNotifications;
+        }
+
+        return dataNotifications;
+    }, [dataNotifications, loadedNotifications]);
+
+    const isFirstLoading =
+        (isLoading || isFetching) && visibleNotifications.length === 0 && !data;
+
+    const isLoadingMore = isFetching && visibleNotifications.length > 0;
+
+    useEffect(() => {
+        refetchNotifications();
+        refetchStats();
+    }, [refetchNotifications, refetchStats]);
 
     useEffect(() => {
         if (!data) {
@@ -78,10 +111,16 @@ export function NotificationsPage() {
 
         setLoadedNotifications((currentNotifications) => {
             if (!cursor) {
-                return items;
+                return mergeNotificationsKeepingFirstPriority(
+                    items,
+                    currentNotifications
+                );
             }
 
-            return mergeNotificationsKeepingOrder(currentNotifications, items);
+            return mergeNotificationsKeepingFirstPriority(
+                currentNotifications,
+                items
+            );
         });
 
         setNextCursor(data.nextCursor);
@@ -89,6 +128,11 @@ export function NotificationsPage() {
     }, [cursor, data]);
 
     useEffect(() => {
+        if (!isFilterMountedRef.current) {
+            isFilterMountedRef.current = true;
+            return;
+        }
+
         setCursor(null);
         setLoadedNotifications([]);
         setNextCursor(null);
@@ -149,10 +193,7 @@ export function NotificationsPage() {
                 refetchStats();
                 refetchNotifications();
             } catch {
-                /*
-                  Если mock/backend временно недоступен, страница все равно покажет
-                  уведомления. Ошибка отметки прочитанными не должна ломать экран.
-                */
+                // Не ломаем страницу, если временно не удалось отметить прочитанными.
             }
         };
 
@@ -184,6 +225,7 @@ export function NotificationsPage() {
             );
 
             refetchStats();
+            refetchNotifications();
         } catch {
             window.alert('Не удалось удалить уведомление.');
         }
@@ -213,40 +255,10 @@ export function NotificationsPage() {
 
     return (
         <Page>
-            <Hero>
-                <HeroContent>
-                    <Eyebrow>Активность</Eyebrow>
-
-                    <Title>Уведомления</Title>
-
-                    <Subtitle>
-                        Уведомления о заявках, лайках и комментариях. При открытии этой
-                        страницы все новые уведомления автоматически помечаются прочитанными.
-                    </Subtitle>
-                </HeroContent>
-
-                <HeroActions>
-                    <RefreshButton type="button" onClick={handleRefresh}>
-                        <FiRefreshCw />
-                        Обновить
-                    </RefreshButton>
-
-                    {(stats?.total || loadedNotifications.length) > 0 && (
-                        <DangerButton
-                            type="button"
-                            disabled={isClearing}
-                            onClick={handleClearAll}
-                        >
-                            <FiTrash2 />
-                            {isClearing ? 'Очищаем...' : 'Очистить'}
-                        </DangerButton>
-                    )}
-                </HeroActions>
-            </Hero>
-
             <StatsGrid>
                 <StatCard>
                     <FiBell />
+
                     <div>
                         <strong>{isStatsLoading ? '...' : stats?.unread || 0}</strong>
                         <span>Новых</span>
@@ -255,6 +267,7 @@ export function NotificationsPage() {
 
                 <StatCard>
                     <FiCheckCircle />
+
                     <div>
                         <strong>{isStatsLoading ? '...' : stats?.approved || 0}</strong>
                         <span>Одобрено</span>
@@ -263,6 +276,7 @@ export function NotificationsPage() {
 
                 <StatCard>
                     <FiXCircle />
+
                     <div>
                         <strong>{isStatsLoading ? '...' : stats?.rejected || 0}</strong>
                         <span>Отклонено</span>
@@ -271,6 +285,7 @@ export function NotificationsPage() {
 
                 <StatCard>
                     <FiHeart />
+
                     <div>
                         <strong>{isStatsLoading ? '...' : stats?.social || 0}</strong>
                         <span>Лайки / комментарии</span>
@@ -329,19 +344,43 @@ export function NotificationsPage() {
                     </FilterButton>
                 </FilterGroup>
 
-                <ToolbarMeta>
-                    Всего: {isStatsLoading ? '...' : stats?.total || 0}
-                </ToolbarMeta>
+                <ToolbarActions>
+
+
+                    {(stats?.total || visibleNotifications.length) > 0 && (
+                        <DangerButton
+                            type="button"
+                            disabled={isClearing}
+                            onClick={handleClearAll}
+                        >
+                            <FiTrash2 />
+                            {isClearing ? 'Очищаем...' : 'Очистить'}
+                        </DangerButton>
+                    )}
+                </ToolbarActions>
             </Toolbar>
 
+            <FeedMeta>
+                <span>Всего: {isStatsLoading ? '...' : stats?.total || 0}</span>
+
+                {isLoadingMore && (
+                    <LoadingInline>
+                        <FiLoader />
+                        Подгружаем еще...
+                    </LoadingInline>
+                )}
+            </FeedMeta>
+
             {isFirstLoading ? (
-                <LoadingCard>
+                <StateCard>
                     <FiLoader />
+
                     <h2>Загружаем уведомления</h2>
+
                     <p>Сейчас покажем вашу активность.</p>
-                </LoadingCard>
-            ) : isError && !loadedNotifications.length ? (
-                <EmptyCard>
+                </StateCard>
+            ) : isError && !visibleNotifications.length ? (
+                <StateCard>
                     <FiAlertCircle />
 
                     <h2>Не удалось загрузить уведомления</h2>
@@ -351,22 +390,11 @@ export function NotificationsPage() {
                     <PrimaryButton type="button" onClick={handleRefresh}>
                         Повторить
                     </PrimaryButton>
-                </EmptyCard>
-            ) : loadedNotifications.length ? (
+                </StateCard>
+            ) : visibleNotifications.length ? (
                 <>
-                    <FeedMeta>
-                        <span>Загружено на странице: {loadedNotifications.length}</span>
-
-                        {isLoadingMore && (
-                            <LoadingInline>
-                                <FiLoader />
-                                Подгружаем еще...
-                            </LoadingInline>
-                        )}
-                    </FeedMeta>
-
                     <NotificationsList>
-                        {loadedNotifications.map((notification) => (
+                        {visibleNotifications.map((notification) => (
                             <NotificationCard
                                 key={notification.id}
                                 $unread={!notification.isRead}
@@ -384,7 +412,9 @@ export function NotificationsPage() {
                                             </NotificationTitle>
 
                                             <NotificationDate>
-                                                {new Date(notification.createdAt).toLocaleString('ru-RU')}
+                                                {new Date(notification.createdAt).toLocaleString(
+                                                    'ru-RU'
+                                                )}
                                             </NotificationDate>
                                         </div>
 
@@ -397,7 +427,7 @@ export function NotificationsPage() {
 
                                     <NotificationActions>
                                         {notification.postId ? (
-                                            <SmallLink to={`/posts/${notification.postId}`}>
+                                            <SmallLink to={`/posts/${notification.postId}#comments`}>
                                                 Открыть пост
                                             </SmallLink>
                                         ) : notification.requestId ? (
@@ -422,7 +452,9 @@ export function NotificationsPage() {
                         {hasMore ? (
                             <LoadingMore>
                                 <FiLoader />
-                                <span>Листайте ниже — уведомления подгрузятся автоматически</span>
+                                <span>
+                  Листайте ниже — уведомления подгрузятся автоматически
+                </span>
                             </LoadingMore>
                         ) : (
                             <EndMessage>
@@ -433,7 +465,7 @@ export function NotificationsPage() {
                 </>
             ) : (
                 <EmptyCard>
-                    <FiAlertCircle />
+                    <FiBell />
 
                     <h2>Уведомлений пока нет</h2>
 
@@ -442,24 +474,30 @@ export function NotificationsPage() {
                         новые лайки или комментарии, уведомления будут отображаться здесь.
                     </p>
 
-                    <PrimaryLink to="/submit-content">Предложить публикацию</PrimaryLink>
+                    <PrimaryLink to="/content-request">Предложить публикацию</PrimaryLink>
                 </EmptyCard>
             )}
         </Page>
     );
 }
 
-function mergeNotificationsKeepingOrder(
+function mergeNotificationsKeepingFirstPriority(
     first: MockNotification[],
     second: MockNotification[]
 ) {
-    const map = new Map<number, MockNotification>();
+    const result: MockNotification[] = [];
+    const seen = new Set<number>();
 
     [...first, ...second].forEach((notification) => {
-        map.set(notification.id, notification);
+        if (seen.has(notification.id)) {
+            return;
+        }
+
+        seen.add(notification.id);
+        result.push(notification);
     });
 
-    return Array.from(map.values());
+    return result;
 }
 
 function getNotificationIcon(type: NotificationType) {
@@ -471,11 +509,11 @@ function getNotificationIcon(type: NotificationType) {
         return <FiXCircle />;
     }
 
-    if (type === 'NEW_LIKE') {
-        return <FiHeart />;
+    if (type === 'NEW_COMMENT') {
+        return <FiMessageCircle />;
     }
 
-    return <FiMessageCircle />;
+    return <FiHeart />;
 }
 
 function getNotificationTypeText(type: NotificationType) {
@@ -487,112 +525,16 @@ function getNotificationTypeText(type: NotificationType) {
         return 'Заявка отклонена';
     }
 
-    if (type === 'NEW_LIKE') {
-        return 'Новый лайк';
+    if (type === 'NEW_COMMENT') {
+        return 'Комментарий';
     }
 
-    return 'Новый комментарий';
+    return 'Лайк';
 }
 
 const Page = styled.div`
-  display: grid;
-  gap: 18px;
-`;
-
-const Hero = styled.section`
-  padding: 22px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: ${({ theme }) => theme.radius.lg};
-  background:
-    radial-gradient(circle at top left, rgba(124, 58, 237, 0.24), transparent 34%),
-    radial-gradient(circle at bottom right, rgba(239, 68, 68, 0.14), transparent 34%),
-    rgba(21, 25, 43, 0.86);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-
-  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-    align-items: flex-start;
-    flex-direction: column;
-    padding: 18px;
-  }
-`;
-
-const HeroContent = styled.div`
-  min-width: 0;
-`;
-
-const Eyebrow = styled.div`
-  margin-bottom: 8px;
-  color: ${({ theme }) => theme.colors.primaryHover};
-  font-size: 13px;
-  font-weight: 900;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-`;
-
-const Title = styled.h1`
-  margin: 0;
-  font-size: clamp(30px, 5vw, 52px);
-  line-height: 0.96;
-  letter-spacing: -0.075em;
-`;
-
-const Subtitle = styled.p`
-  max-width: 720px;
-  margin: 12px 0 0;
-  color: ${({ theme }) => theme.colors.textMuted};
-  line-height: 1.65;
-`;
-
-const HeroActions = styled.div`
-    flex: 0 0 auto;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 9px;
-`;
-
-const RefreshButton = styled.button`
-    min-height: 46px;
-    padding: 0 16px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(255, 255, 255, 0.06);
-    color: ${({ theme }) => theme.colors.text};
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 9px;
-    font-weight: 900;
-
-    &:hover {
-        background: rgba(255, 255, 255, 0.1);
-        border-color: rgba(139, 92, 246, 0.46);
-    }
-`;
-
-const DangerButton = styled.button`
-    min-height: 46px;
-    padding: 0 16px;
-    border: 1px solid rgba(239, 68, 68, 0.3);
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(239, 68, 68, 0.1);
-    color: #fecaca;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 9px;
-    font-weight: 900;
-
-    &:hover:not(:disabled) {
-        background: rgba(239, 68, 68, 0.16);
-    }
-
-    &:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-    }
+    display: grid;
+    gap: 18px;
 `;
 
 const StatsGrid = styled.div`
@@ -690,17 +632,42 @@ const FilterButton = styled.button<{ $active?: boolean }>`
     }
 `;
 
-const ToolbarMeta = styled.div`
+const ToolbarActions = styled.div`
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+`;
+
+const RefreshButton = styled.button`
     min-height: 40px;
     padding: 0 13px;
     border: 1px solid ${({ theme }) => theme.colors.border};
     border-radius: ${({ theme }) => theme.radius.full};
     background: rgba(255, 255, 255, 0.04);
-    color: ${({ theme }) => theme.colors.textMuted};
+    color: ${({ theme }) => theme.colors.text};
     display: inline-flex;
     align-items: center;
-    font-size: 13px;
+    gap: 8px;
     font-weight: 900;
+
+    &:hover {
+        background: rgba(255, 255, 255, 0.08);
+    }
+`;
+
+const DangerButton = styled(RefreshButton)`
+    border-color: rgba(239, 68, 68, 0.3);
+    background: rgba(239, 68, 68, 0.1);
+    color: #fecaca;
+
+    &:hover:not(:disabled) {
+        background: rgba(239, 68, 68, 0.16);
+    }
+
+    &:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
 `;
 
 const FeedMeta = styled.div`
@@ -736,7 +703,7 @@ const LoadingInline = styled.div`
     }
 `;
 
-const LoadingCard = styled.section`
+const StateCard = styled.section`
     min-height: 360px;
     padding: 30px 22px;
     border: 1px dashed rgba(139, 92, 246, 0.34);
@@ -752,7 +719,6 @@ const LoadingCard = styled.section`
         margin-bottom: 16px;
         color: ${({ theme }) => theme.colors.primaryHover};
         font-size: 44px;
-        animation: spin 0.8s linear infinite;
     }
 
     h2 {
@@ -766,12 +732,6 @@ const LoadingCard = styled.section`
         margin: 0;
         color: ${({ theme }) => theme.colors.textMuted};
         line-height: 1.6;
-    }
-
-    @keyframes spin {
-        to {
-            transform: rotate(360deg);
-        }
     }
 `;
 

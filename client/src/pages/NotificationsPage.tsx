@@ -10,7 +10,6 @@ import {
     FiHeart,
     FiLoader,
     FiMessageCircle,
-    FiRefreshCw,
     FiTrash2,
     FiXCircle,
 } from 'react-icons/fi';
@@ -57,6 +56,9 @@ export function NotificationsPage() {
         },
         {
             refetchOnMountOrArgChange: true,
+            pollingInterval: STATS_POLLING_INTERVAL,
+            refetchOnFocus: true,
+            refetchOnReconnect: true,
         }
     );
 
@@ -67,6 +69,8 @@ export function NotificationsPage() {
     } = useGetNotificationsStatsQuery(undefined, {
         pollingInterval: STATS_POLLING_INTERVAL,
         refetchOnMountOrArgChange: true,
+        refetchOnFocus: true,
+        refetchOnReconnect: true,
     });
 
     const [markAllNotificationsAsRead] = useMarkAllNotificationsAsReadMutation();
@@ -250,38 +254,6 @@ export function NotificationsPage() {
 
     return (
         <Page>
-            <Hero>
-                <HeroContent>
-                    <Eyebrow>Активность</Eyebrow>
-
-                    <Title>Уведомления</Title>
-
-                    <Subtitle>
-                        Уведомления о заявках, лайках и комментариях. При открытии этой
-                        страницы все новые уведомления автоматически помечаются
-                        прочитанными.
-                    </Subtitle>
-                </HeroContent>
-
-                <HeroActions>
-                    <RefreshButton type="button" onClick={handleRefresh}>
-                        <FiRefreshCw />
-                        Обновить
-                    </RefreshButton>
-
-                    {(stats?.total || visibleNotifications.length) > 0 && (
-                        <DangerButton
-                            type="button"
-                            disabled={isClearing}
-                            onClick={handleClearAll}
-                        >
-                            <FiTrash2 />
-                            {isClearing ? 'Очищаем...' : 'Очистить'}
-                        </DangerButton>
-                    )}
-                </HeroActions>
-            </Hero>
-
             <StatsGrid>
                 <StatCard>
                     <FiBell />
@@ -320,55 +292,72 @@ export function NotificationsPage() {
                 </StatCard>
             </StatsGrid>
 
-            <Tabs>
-                <TabButton
-                    type="button"
-                    $active={filter === 'ALL'}
-                    onClick={() => setFilter('ALL')}
-                >
-                    Все
-                </TabButton>
+            <Toolbar>
+                <FilterGroup>
+                    <FilterButton
+                        type="button"
+                        $active={filter === 'ALL'}
+                        onClick={() => setFilter('ALL')}
+                    >
+                        Все
+                    </FilterButton>
 
-                <TabButton
-                    type="button"
-                    $active={filter === 'UNREAD'}
-                    onClick={() => setFilter('UNREAD')}
-                >
-                    Новые
-                </TabButton>
+                    <FilterButton
+                        type="button"
+                        $active={filter === 'UNREAD'}
+                        onClick={() => setFilter('UNREAD')}
+                    >
+                        Новые
+                    </FilterButton>
 
-                <TabButton
-                    type="button"
-                    $active={filter === 'REQUEST_APPROVED'}
-                    onClick={() => setFilter('REQUEST_APPROVED')}
-                >
-                    Одобрено
-                </TabButton>
+                    <FilterButton
+                        type="button"
+                        $active={filter === 'REQUEST_APPROVED'}
+                        onClick={() => setFilter('REQUEST_APPROVED')}
+                    >
+                        Одобрено
+                    </FilterButton>
 
-                <TabButton
-                    type="button"
-                    $active={filter === 'REQUEST_REJECTED'}
-                    onClick={() => setFilter('REQUEST_REJECTED')}
-                >
-                    Отклонено
-                </TabButton>
+                    <FilterButton
+                        type="button"
+                        $active={filter === 'REQUEST_REJECTED'}
+                        onClick={() => setFilter('REQUEST_REJECTED')}
+                    >
+                        Отклонено
+                    </FilterButton>
 
-                <TabButton
-                    type="button"
-                    $active={filter === 'NEW_LIKE'}
-                    onClick={() => setFilter('NEW_LIKE')}
-                >
-                    Лайки
-                </TabButton>
+                    <FilterButton
+                        type="button"
+                        $active={filter === 'NEW_LIKE'}
+                        onClick={() => setFilter('NEW_LIKE')}
+                    >
+                        Лайки
+                    </FilterButton>
 
-                <TabButton
-                    type="button"
-                    $active={filter === 'NEW_COMMENT'}
-                    onClick={() => setFilter('NEW_COMMENT')}
-                >
-                    Комментарии
-                </TabButton>
-            </Tabs>
+                    <FilterButton
+                        type="button"
+                        $active={filter === 'NEW_COMMENT'}
+                        onClick={() => setFilter('NEW_COMMENT')}
+                    >
+                        Комментарии
+                    </FilterButton>
+                </FilterGroup>
+
+                <ToolbarActions>
+
+
+                    {(stats?.total || visibleNotifications.length) > 0 && (
+                        <DangerButton
+                            type="button"
+                            disabled={isClearing}
+                            onClick={handleClearAll}
+                        >
+                            <FiTrash2 />
+                            {isClearing ? 'Очищаем...' : 'Очистить'}
+                        </DangerButton>
+                    )}
+                </ToolbarActions>
+            </Toolbar>
 
             <FeedMeta>
                 <span>Всего: {isStatsLoading ? '...' : stats?.total || 0}</span>
@@ -409,45 +398,51 @@ export function NotificationsPage() {
                                 key={notification.id}
                                 $unread={!notification.isRead}
                             >
-                                <NotificationIcon>
+                                <NotificationIcon $type={notification.type}>
                                     {getNotificationIcon(notification.type)}
                                 </NotificationIcon>
 
                                 <NotificationBody>
                                     <NotificationTop>
-                                        <strong>{notification.title}</strong>
+                                        <div>
+                                            <NotificationTitle>
+                                                {notification.title}
+                                                {!notification.isRead && <UnreadDot />}
+                                            </NotificationTitle>
 
-                                        {!notification.isRead && <UnreadBadge>Новое</UnreadBadge>}
+                                            <NotificationDate>
+                                                {new Date(notification.createdAt).toLocaleString(
+                                                    'ru-RU'
+                                                )}
+                                            </NotificationDate>
+                                        </div>
+
+                                        <TypeBadge $type={notification.type}>
+                                            {getNotificationTypeText(notification.type)}
+                                        </TypeBadge>
                                     </NotificationTop>
-
-                                    <NotificationMeta>
-                    <span>
-                      {new Date(notification.createdAt).toLocaleString('ru-RU')}
-                    </span>
-                                        <span>{getNotificationTypeText(notification.type)}</span>
-                                    </NotificationMeta>
 
                                     <NotificationText>{notification.text}</NotificationText>
 
-                                    <NotificationLinks>
+                                    <NotificationActions>
                                         {notification.postId ? (
-                                            <OpenLink to={`/posts/${notification.postId}#comments`}>
+                                            <SmallLink to={`/posts/${notification.postId}#comments`}>
                                                 Открыть пост
-                                            </OpenLink>
+                                            </SmallLink>
                                         ) : notification.requestId ? (
-                                            <OpenLink to="/my-posts">Открыть мои заявки</OpenLink>
+                                            <SmallLink to="/my-posts">Открыть мои заявки</SmallLink>
                                         ) : null}
-                                    </NotificationLinks>
-                                </NotificationBody>
 
-                                <DeleteButton
-                                    type="button"
-                                    disabled={isDeleting}
-                                    onClick={() => handleDelete(notification.id)}
-                                >
-                                    <FiTrash2 />
-                                    Удалить
-                                </DeleteButton>
+                                        <DeleteButton
+                                            type="button"
+                                            disabled={isDeleting}
+                                            onClick={() => handleDelete(notification.id)}
+                                        >
+                                            <FiTrash2 />
+                                            Удалить
+                                        </DeleteButton>
+                                    </NotificationActions>
+                                </NotificationBody>
                             </NotificationCard>
                         ))}
                     </NotificationsList>
@@ -477,6 +472,8 @@ export function NotificationsPage() {
                         Когда админ одобрит или отклонит вашу заявку, а также когда появятся
                         новые лайки или комментарии, уведомления будут отображаться здесь.
                     </p>
+
+                    <PrimaryLink to="/content-request">Предложить публикацию</PrimaryLink>
                 </EmptyCard>
             )}
         </Page>
@@ -539,55 +536,6 @@ const Page = styled.div`
     gap: 18px;
 `;
 
-const Hero = styled.section`
-    padding: 22px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.lg};
-    background: rgba(21, 25, 43, 0.86);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 18px;
-
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        align-items: flex-start;
-        flex-direction: column;
-    }
-`;
-
-const HeroContent = styled.div`
-    min-width: 0;
-`;
-
-const Eyebrow = styled.div`
-    margin-bottom: 8px;
-    color: ${({ theme }) => theme.colors.primaryHover};
-    font-size: 13px;
-    font-weight: 900;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-`;
-
-const Title = styled.h1`
-    margin: 0;
-    font-size: clamp(30px, 5vw, 52px);
-    line-height: 0.96;
-    letter-spacing: -0.075em;
-`;
-
-const Subtitle = styled.p`
-    max-width: 720px;
-    margin: 12px 0 0;
-    color: ${({ theme }) => theme.colors.textMuted};
-    line-height: 1.65;
-`;
-
-const HeroActions = styled.div`
-    display: flex;
-    flex-wrap: wrap;
-    gap: 9px;
-`;
-
 const StatsGrid = styled.div`
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -620,9 +568,16 @@ const StatCard = styled.article`
         color: ${({ theme }) => theme.colors.primaryHover};
     }
 
+    div {
+        min-width: 0;
+        display: grid;
+        gap: 2px;
+    }
+
     strong {
         font-size: 28px;
         line-height: 1;
+        letter-spacing: -0.05em;
     }
 
     span {
@@ -632,48 +587,86 @@ const StatCard = styled.article`
     }
 `;
 
-const Tabs = styled.div`
-    padding: 8px;
+const Toolbar = styled.div`
+    padding: 12px;
     border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: 22px;
+    border-radius: ${({ theme }) => theme.radius.lg};
     background: rgba(21, 25, 43, 0.76);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+
+    @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
+        align-items: stretch;
+        flex-direction: column;
+    }
+`;
+
+const FilterGroup = styled.div`
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
 `;
 
-const TabButton = styled.button<{ $active?: boolean }>`
+const FilterButton = styled.button<{ $active?: boolean }>`
     min-height: 40px;
-    padding: 0 14px;
+    padding: 0 13px;
     border: 1px solid
     ${({ theme, $active }) =>
-            $active ? 'rgba(139, 92, 246, 0.62)' : theme.colors.border};
+            $active ? 'rgba(139, 92, 246, 0.7)' : theme.colors.border};
     border-radius: ${({ theme }) => theme.radius.full};
     background: ${({ $active }) =>
             $active
-                    ? 'linear-gradient(135deg, rgba(124, 58, 237, 0.82), rgba(37, 99, 235, 0.72))'
-                    : 'rgba(255, 255, 255, 0.045)'};
+                    ? 'linear-gradient(135deg, rgba(124, 58, 237, 0.75), rgba(37, 99, 235, 0.68))'
+                    : 'rgba(255, 255, 255, 0.04)'};
     color: ${({ theme }) => theme.colors.text};
     font-weight: 900;
+
+    &:hover {
+        background: ${({ $active }) =>
+                $active
+                        ? 'linear-gradient(135deg, rgba(124, 58, 237, 0.75), rgba(37, 99, 235, 0.68))'
+                        : 'rgba(255,255,255,0.075)'};
+    }
+`;
+
+const ToolbarActions = styled.div`
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
 `;
 
 const RefreshButton = styled.button`
-    min-height: 46px;
-    padding: 0 16px;
+    min-height: 40px;
+    padding: 0 13px;
     border: 1px solid ${({ theme }) => theme.colors.border};
     border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(255, 255, 255, 0.055);
+    background: rgba(255, 255, 255, 0.04);
     color: ${({ theme }) => theme.colors.text};
     display: inline-flex;
     align-items: center;
-    gap: 9px;
+    gap: 8px;
     font-weight: 900;
+
+    &:hover {
+        background: rgba(255, 255, 255, 0.08);
+    }
 `;
 
 const DangerButton = styled(RefreshButton)`
-    border-color: rgba(239, 68, 68, 0.32);
+    border-color: rgba(239, 68, 68, 0.3);
     background: rgba(239, 68, 68, 0.1);
     color: #fecaca;
+
+    &:hover:not(:disabled) {
+        background: rgba(239, 68, 68, 0.16);
+    }
+
+    &:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
 `;
 
 const FeedMeta = styled.div`
@@ -685,6 +678,11 @@ const FeedMeta = styled.div`
     gap: 12px;
     font-size: 13px;
     font-weight: 800;
+
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        align-items: flex-start;
+        flex-direction: column;
+    }
 `;
 
 const LoadingInline = styled.div`
@@ -704,105 +702,190 @@ const LoadingInline = styled.div`
     }
 `;
 
+const StateCard = styled.section`
+    min-height: 360px;
+    padding: 30px 22px;
+    border: 1px dashed rgba(139, 92, 246, 0.34);
+    border-radius: ${({ theme }) => theme.radius.lg};
+    background: rgba(21, 25, 43, 0.74);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+
+    > svg {
+        margin-bottom: 16px;
+        color: ${({ theme }) => theme.colors.primaryHover};
+        font-size: 44px;
+    }
+
+    h2 {
+        margin: 0 0 10px;
+        font-size: clamp(24px, 4vw, 34px);
+        letter-spacing: -0.06em;
+    }
+
+    p {
+        max-width: 480px;
+        margin: 0;
+        color: ${({ theme }) => theme.colors.textMuted};
+        line-height: 1.6;
+    }
+`;
+
 const NotificationsList = styled.div`
     display: grid;
     gap: 12px;
 `;
 
 const NotificationCard = styled.article<{ $unread?: boolean }>`
-    padding: 14px;
+    padding: 16px;
     border: 1px solid
     ${({ theme, $unread }) =>
-            $unread ? 'rgba(139, 92, 246, 0.54)' : theme.colors.border};
+            $unread ? 'rgba(139, 92, 246, 0.52)' : theme.colors.border};
     border-radius: ${({ theme }) => theme.radius.lg};
     background: ${({ $unread }) =>
-            $unread ? 'rgba(124, 58, 237, 0.12)' : 'rgba(21, 25, 43, 0.78)'};
+            $unread
+                    ? 'linear-gradient(135deg, rgba(124,58,237,0.16), rgba(37,99,235,0.08)), rgba(21,25,43,0.88)'
+                    : 'rgba(21, 25, 43, 0.78)'};
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    gap: 13px;
-    align-items: flex-start;
+    grid-template-columns: 52px minmax(0, 1fr);
+    gap: 14px;
 
     @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        grid-template-columns: auto minmax(0, 1fr);
+        grid-template-columns: 1fr;
     }
 `;
 
-const NotificationIcon = styled.div`
-    width: 44px;
-    height: 44px;
-    border-radius: 16px;
-    background: linear-gradient(135deg, #7c3aed, #2563eb);
+const NotificationIcon = styled.div<{ $type: NotificationType }>`
+    width: 52px;
+    height: 52px;
+    border-radius: 19px;
     color: white;
     display: grid;
     place-items: center;
-    font-size: 20px;
+    font-size: 24px;
+    background: ${({ $type }) => {
+        if ($type === 'REQUEST_APPROVED') {
+            return 'linear-gradient(135deg, #16a34a, #2563eb)';
+        }
+
+        if ($type === 'REQUEST_REJECTED') {
+            return 'linear-gradient(135deg, #ef4444, #7c3aed)';
+        }
+
+        if ($type === 'NEW_LIKE') {
+            return 'linear-gradient(135deg, #ec4899, #7c3aed)';
+        }
+
+        return 'linear-gradient(135deg, #2563eb, #7c3aed)';
+    }};
 `;
 
 const NotificationBody = styled.div`
     min-width: 0;
     display: grid;
-    gap: 7px;
+    gap: 10px;
 `;
 
 const NotificationTop = styled.div`
     display: flex;
-    align-items: center;
-    gap: 9px;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
 
-    strong {
-        font-size: 17px;
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        flex-direction: column;
     }
 `;
 
-const UnreadBadge = styled.span`
-    padding: 4px 8px;
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: #ef4444;
-    color: white;
-    font-size: 11px;
-    font-weight: 950;
+const NotificationTitle = styled.h2`
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 22px;
+    letter-spacing: -0.055em;
 `;
 
-const NotificationMeta = styled.div`
+const UnreadDot = styled.span`
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #8b5cf6;
+    box-shadow: 0 0 0 5px rgba(139, 92, 246, 0.18);
+`;
+
+const NotificationDate = styled.div`
+    margin-top: 5px;
     color: ${({ theme }) => theme.colors.textMuted};
-    display: flex;
-    flex-wrap: wrap;
-    gap: 9px;
+    font-size: 13px;
+    font-weight: 700;
+`;
+
+const TypeBadge = styled.div<{ $type: NotificationType }>`
+    flex: 0 0 auto;
+    min-height: 34px;
+    padding: 0 11px;
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: rgba(124, 58, 237, 0.12);
+    color: ${({ theme }) => theme.colors.primaryHover};
+    display: inline-flex;
+    align-items: center;
     font-size: 12px;
-    font-weight: 800;
+    font-weight: 900;
 `;
 
 const NotificationText = styled.p`
     margin: 0;
     color: ${({ theme }) => theme.colors.textMuted};
-    line-height: 1.55;
+    line-height: 1.6;
 `;
 
-const NotificationLinks = styled.div`
+const NotificationActions = styled.div`
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
 `;
 
-const OpenLink = styled(Link)`
-    color: ${({ theme }) => theme.colors.primaryHover};
+const SmallLink = styled(Link)`
+    min-height: 34px;
+    padding: 0 11px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: rgba(255, 255, 255, 0.05);
+    color: ${({ theme }) => theme.colors.text};
+    display: inline-flex;
+    align-items: center;
+    font-size: 12px;
     font-weight: 900;
+
+    &:hover {
+        background: rgba(255, 255, 255, 0.09);
+    }
 `;
 
 const DeleteButton = styled.button`
-    min-height: 38px;
-    padding: 0 12px;
-    border: 1px solid rgba(239, 68, 68, 0.28);
+    min-height: 34px;
+    padding: 0 11px;
+    border: 1px solid rgba(239, 68, 68, 0.26);
     border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(239, 68, 68, 0.1);
+    background: rgba(239, 68, 68, 0.09);
     color: #fecaca;
     display: inline-flex;
     align-items: center;
     gap: 7px;
+    font-size: 12px;
     font-weight: 900;
 
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        grid-column: 1 / -1;
-        justify-content: center;
+    &:hover:not(:disabled) {
+        background: rgba(239, 68, 68, 0.15);
+    }
+
+    &:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
     }
 `;
 
@@ -828,6 +911,12 @@ const LoadingMore = styled.div`
         color: ${({ theme }) => theme.colors.primaryHover};
         animation: spin 0.8s linear infinite;
     }
+
+    @keyframes spin {
+        to {
+            transform: rotate(360deg);
+        }
+    }
 `;
 
 const EndMessage = styled.div`
@@ -839,41 +928,64 @@ const EndMessage = styled.div`
 const EmptyCard = styled.section`
     min-height: 420px;
     padding: 30px 22px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
+    border: 1px dashed rgba(139, 92, 246, 0.34);
     border-radius: ${({ theme }) => theme.radius.lg};
-    background: rgba(21, 25, 43, 0.86);
-    display: grid;
-    place-items: center;
+    background:
+            radial-gradient(circle at top left, rgba(124, 58, 237, 0.18), transparent 34%),
+            rgba(21, 25, 43, 0.74);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
     text-align: center;
 
     > svg {
+        margin-bottom: 16px;
         color: ${({ theme }) => theme.colors.primaryHover};
         font-size: 44px;
     }
 
     h2 {
-        margin: 10px 0;
+        margin: 0 0 10px;
         font-size: clamp(26px, 4vw, 40px);
         letter-spacing: -0.06em;
     }
 
     p {
-        max-width: 560px;
+        max-width: 520px;
         margin: 0;
         color: ${({ theme }) => theme.colors.textMuted};
         line-height: 1.6;
     }
 `;
 
+const PrimaryLink = styled(Link)`
+    min-height: 46px;
+    margin-top: 22px;
+    padding: 0 16px;
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: linear-gradient(135deg, #7c3aed, #2563eb);
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    font-weight: 900;
+
+    &:hover {
+        filter: brightness(1.08);
+    }
+`;
+
 const PrimaryButton = styled.button`
     min-height: 46px;
-    margin-top: 20px;
+    margin-top: 22px;
     padding: 0 16px;
     border: none;
     border-radius: ${({ theme }) => theme.radius.full};
     background: linear-gradient(135deg, #7c3aed, #2563eb);
     color: white;
     font-weight: 900;
-`;
 
-const StateCard = styled(EmptyCard)``;
+    &:hover {
+        filter: brightness(1.08);
+    }
+`;

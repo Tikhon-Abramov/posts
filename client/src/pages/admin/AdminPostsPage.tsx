@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import styled from 'styled-components';
 import {
@@ -11,15 +11,16 @@ import {
     FiImage,
     FiLoader,
     FiMessageCircle,
-    FiRefreshCw,
     FiSearch,
     FiStar,
+    FiThumbsDown,
     FiTrash2,
     FiUser,
     FiVideo,
 } from 'react-icons/fi';
 
 import type {
+    MediaType,
     Post,
     PostVisibility,
 } from '../../entities/post/model/postTypes';
@@ -28,15 +29,17 @@ import {
     useGetAdminPostsQuery,
     useGetAdminPostsStatsQuery,
 } from '../../entities/admin/api/adminPostApi';
-import type { MediaFilter, SortMode } from '../../shared/lib/mockStorage';
 import { getMediaUrl } from '../../shared/lib/getMediaUrl';
 
 type VisibilityFilter = 'ALL' | PostVisibility;
+type MediaFilter = 'ALL' | MediaType;
+type SortMode = 'RECENT' | 'POPULAR';
 
 const POSTS_LIMIT = 12;
 
 export function AdminPostsPage() {
     const loadMoreRef = useRef<HTMLDivElement | null>(null);
+    const isFiltersMountedRef = useRef(false);
 
     const [searchQuery, setSearchQuery] = useState('');
     const [visibilityFilter, setVisibilityFilter] =
@@ -55,26 +58,50 @@ export function AdminPostsPage() {
         isFetching,
         isError,
         refetch: refetchPosts,
-    } = useGetAdminPostsQuery({
-        cursor,
-        limit: POSTS_LIMIT,
-        search: searchQuery,
-        visibility: visibilityFilter,
-        mediaType: mediaFilter,
-        sort: sortMode,
-    });
+    } = useGetAdminPostsQuery(
+        {
+            cursor: cursor || undefined,
+            limit: POSTS_LIMIT,
+            search: searchQuery,
+            visibility: visibilityFilter,
+            mediaType: mediaFilter,
+            sort: sortMode,
+        },
+        {
+            refetchOnMountOrArgChange: true,
+        }
+    );
 
     const {
         data: stats,
         isLoading: isStatsLoading,
         refetch: refetchStats,
-    } = useGetAdminPostsStatsQuery();
+    } = useGetAdminPostsStatsQuery(undefined, {
+        refetchOnMountOrArgChange: true,
+    });
 
     const [deleteAdminPost, { isLoading: isDeleting }] =
         useDeleteAdminPostMutation();
 
-    const isFirstLoading = isLoading && loadedPosts.length === 0;
-    const isLoadingMore = isFetching && loadedPosts.length > 0;
+    const dataPosts = useMemo(() => data?.items || data?.posts || [], [data]);
+
+    const visiblePosts = useMemo(() => {
+        if (loadedPosts.length) {
+            return loadedPosts;
+        }
+
+        return dataPosts;
+    }, [dataPosts, loadedPosts]);
+
+    const isFirstLoading =
+        (isLoading || isFetching) && visiblePosts.length === 0 && !data;
+
+    const isLoadingMore = isFetching && visiblePosts.length > 0;
+
+    useEffect(() => {
+        refetchPosts();
+        refetchStats();
+    }, [refetchPosts, refetchStats]);
 
     useEffect(() => {
         if (!data) {
@@ -85,10 +112,10 @@ export function AdminPostsPage() {
 
         setLoadedPosts((currentPosts) => {
             if (!cursor) {
-                return items;
+                return mergePostsKeepingFirstPriority(items, currentPosts);
             }
 
-            return mergePostsKeepingOrder(currentPosts, items);
+            return mergePostsKeepingFirstPriority(currentPosts, items);
         });
 
         setNextCursor(data.nextCursor);
@@ -96,6 +123,11 @@ export function AdminPostsPage() {
     }, [cursor, data]);
 
     useEffect(() => {
+        if (!isFiltersMountedRef.current) {
+            isFiltersMountedRef.current = true;
+            return;
+        }
+
         setCursor(null);
         setLoadedPosts([]);
         setNextCursor(null);
@@ -140,6 +172,14 @@ export function AdminPostsPage() {
         setVisibilityFilter('ALL');
         setMediaFilter('ALL');
         setSortMode('RECENT');
+
+        setCursor(null);
+        setLoadedPosts([]);
+        setNextCursor(null);
+        setHasMore(true);
+
+        refetchPosts();
+        refetchStats();
     };
 
     const handleRefresh = () => {
@@ -177,35 +217,10 @@ export function AdminPostsPage() {
 
     return (
         <Page>
-            <Hero>
-                <HeroContent>
-                    <Eyebrow>Admin</Eyebrow>
-
-                    <Title>Посты</Title>
-
-                    <Subtitle>
-                        Управление опубликованными материалами. Список постов подгружается
-                        частями, а статистика берется отдельным запросом, поэтому счетчики
-                        не зависят от количества уже загруженных карточек.
-                    </Subtitle>
-                </HeroContent>
-
-                <HeroActions>
-                    <CreateLink to="/admin/posts/create">
-                        <FiFileText />
-                        Создать пост
-                    </CreateLink>
-
-                    <RefreshButton type="button" onClick={handleRefresh}>
-                        <FiRefreshCw />
-                        Обновить
-                    </RefreshButton>
-                </HeroActions>
-            </Hero>
-
             <StatsGrid>
                 <StatCard>
                     <FiFileText />
+
                     <div>
                         <strong>{isStatsLoading ? '...' : stats?.total || 0}</strong>
                         <span>Всего постов</span>
@@ -214,6 +229,7 @@ export function AdminPostsPage() {
 
                 <StatCard>
                     <FiGlobe />
+
                     <div>
                         <strong>{isStatsLoading ? '...' : stats?.publicPosts || 0}</strong>
                         <span>Обычная лента</span>
@@ -222,6 +238,7 @@ export function AdminPostsPage() {
 
                 <StatCard>
                     <FiStar />
+
                     <div>
                         <strong>{isStatsLoading ? '...' : stats?.premiumPosts || 0}</strong>
                         <span>Premium</span>
@@ -230,6 +247,7 @@ export function AdminPostsPage() {
 
                 <StatCard>
                     <FiVideo />
+
                     <div>
                         <strong>{isStatsLoading ? '...' : stats?.videosCount || 0}</strong>
                         <span>Видео</span>
@@ -243,7 +261,7 @@ export function AdminPostsPage() {
 
                     <input
                         value={searchQuery}
-                        placeholder="Поиск по ID, названию, описанию или автору..."
+                        placeholder="Поиск по названию, описанию, автору или ID..."
                         onChange={(event) => setSearchQuery(event.target.value)}
                     />
                 </SearchBox>
@@ -262,9 +280,7 @@ export function AdminPostsPage() {
 
                     <FilterSelect
                         value={mediaFilter}
-                        onChange={(event) =>
-                            setMediaFilter(event.target.value as MediaFilter)
-                        }
+                        onChange={(event) => setMediaFilter(event.target.value as MediaFilter)}
                     >
                         <option value="ALL">Фото и видео</option>
                         <option value="IMAGE">Только фото</option>
@@ -280,10 +296,19 @@ export function AdminPostsPage() {
                     </FilterSelect>
                 </Filters>
 
-                <ResetButton type="button" onClick={resetFilters}>
-                    <FiFilter />
-                    Сбросить
-                </ResetButton>
+                <ToolbarActions>
+                    <CreateLink to="/admin/posts/create">
+                        <FiFileText />
+                        Создать
+                    </CreateLink>
+
+                    <ResetButton type="button" onClick={resetFilters}>
+                        <FiFilter />
+                        Сбросить
+                    </ResetButton>
+
+
+                </ToolbarActions>
             </Toolbar>
 
             {isFirstLoading ? (
@@ -294,7 +319,7 @@ export function AdminPostsPage() {
 
                     <p>Сейчас покажем опубликованные материалы.</p>
                 </StateCard>
-            ) : isError && !loadedPosts.length ? (
+            ) : isError && !visiblePosts.length ? (
                 <StateCard>
                     <FiAlertCircle />
 
@@ -306,10 +331,10 @@ export function AdminPostsPage() {
                         Повторить
                     </PrimaryButton>
                 </StateCard>
-            ) : loadedPosts.length ? (
+            ) : visiblePosts.length ? (
                 <>
                     <FeedMeta>
-                        <span>Загружено на странице: {loadedPosts.length}</span>
+                        <span>Загружено на странице: {visiblePosts.length}</span>
 
                         {isLoadingMore && (
                             <LoadingInline>
@@ -320,7 +345,7 @@ export function AdminPostsPage() {
                     </FeedMeta>
 
                     <PostsList>
-                        {loadedPosts.map((post) => {
+                        {visiblePosts.map((post) => {
                             const firstMedia = post.media[0];
                             const mediaUrl = getMediaUrl(firstMedia?.url);
                             const authorAvatarUrl = getMediaUrl(post.author.avatarUrl);
@@ -398,17 +423,17 @@ export function AdminPostsPage() {
                                         <InfoGrid>
                                             <InfoItem>
                                                 <FiHeart />
-                                                <span>{post.likesCount} лайков</span>
+                                                {post.likesCount} лайков
                                             </InfoItem>
 
                                             <InfoItem>
-                                                <FiAlertCircle />
-                                                <span>{post.dislikesCount} дизлайков</span>
+                                                <FiThumbsDown />
+                                                {post.dislikesCount} дизлайков
                                             </InfoItem>
 
                                             <InfoItem>
                                                 <FiMessageCircle />
-                                                <span>{post.commentsCount} комментариев</span>
+                                                {post.commentsCount} комментариев
                                             </InfoItem>
                                         </InfoGrid>
 
@@ -457,27 +482,31 @@ export function AdminPostsPage() {
                         текущие фильтры.
                     </p>
 
-                    <Actions>
-                        <PrimaryLink to="/admin/posts/create">Создать пост</PrimaryLink>
+                    <PrimaryLink to="/admin/posts/create">Создать пост</PrimaryLink>
 
-                        <PrimaryButton type="button" onClick={resetFilters}>
-                            Сбросить фильтры
-                        </PrimaryButton>
-                    </Actions>
+                    <PrimaryButton type="button" onClick={resetFilters}>
+                        Сбросить фильтры
+                    </PrimaryButton>
                 </EmptyCard>
             )}
         </Page>
     );
 }
 
-function mergePostsKeepingOrder(first: Post[], second: Post[]) {
-    const map = new Map<number, Post>();
+function mergePostsKeepingFirstPriority(first: Post[], second: Post[]) {
+    const result: Post[] = [];
+    const seen = new Set<number>();
 
     [...first, ...second].forEach((post) => {
-        map.set(post.id, post);
+        if (seen.has(post.id)) {
+            return;
+        }
+
+        seen.add(post.id);
+        result.push(post);
     });
 
-    return Array.from(map.values());
+    return result;
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -496,95 +525,6 @@ function getErrorMessage(error: unknown, fallback: string) {
 const Page = styled.div`
     display: grid;
     gap: 18px;
-`;
-
-const Hero = styled.section`
-    padding: 22px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.lg};
-    background:
-            radial-gradient(circle at top left, rgba(124, 58, 237, 0.24), transparent 34%),
-            radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.16), transparent 34%),
-            rgba(21, 25, 43, 0.86);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 18px;
-
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        align-items: flex-start;
-        flex-direction: column;
-        padding: 18px;
-    }
-`;
-
-const HeroContent = styled.div`
-    min-width: 0;
-`;
-
-const Eyebrow = styled.div`
-    margin-bottom: 8px;
-    color: ${({ theme }) => theme.colors.primaryHover};
-    font-size: 13px;
-    font-weight: 900;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-`;
-
-const Title = styled.h1`
-    margin: 0;
-    font-size: clamp(30px, 5vw, 52px);
-    line-height: 0.96;
-    letter-spacing: -0.075em;
-`;
-
-const Subtitle = styled.p`
-    max-width: 760px;
-    margin: 12px 0 0;
-    color: ${({ theme }) => theme.colors.textMuted};
-    line-height: 1.65;
-`;
-
-const HeroActions = styled.div`
-    flex: 0 0 auto;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 9px;
-`;
-
-const CreateLink = styled(Link)`
-    min-height: 46px;
-    padding: 0 16px;
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: linear-gradient(135deg, #7c3aed, #2563eb);
-    color: white;
-    display: inline-flex;
-    align-items: center;
-    gap: 9px;
-    font-weight: 900;
-
-    &:hover {
-        filter: brightness(1.08);
-    }
-`;
-
-const RefreshButton = styled.button`
-    min-height: 46px;
-    padding: 0 16px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(255, 255, 255, 0.06);
-    color: ${({ theme }) => theme.colors.text};
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 9px;
-    font-weight: 900;
-
-    &:hover {
-        background: rgba(255, 255, 255, 0.1);
-        border-color: rgba(139, 92, 246, 0.46);
-    }
 `;
 
 const StatsGrid = styled.div`
@@ -718,7 +658,34 @@ const FilterSelect = styled.select`
     }
 `;
 
-const ResetButton = styled.button`
+const ToolbarActions = styled.div`
+    display: flex;
+    gap: 8px;
+
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        display: grid;
+        grid-template-columns: 1fr;
+    }
+`;
+
+const CreateLink = styled(Link)`
+    min-height: 46px;
+    padding: 0 16px;
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: linear-gradient(135deg, #7c3aed, #2563eb);
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    font-weight: 900;
+
+    &:hover {
+        filter: brightness(1.08);
+    }
+`;
+
+const RefreshButton = styled.button`
     min-height: 46px;
     padding: 0 16px;
     border: 1px solid ${({ theme }) => theme.colors.border};
@@ -736,6 +703,8 @@ const ResetButton = styled.button`
         border-color: rgba(139, 92, 246, 0.45);
     }
 `;
+
+const ResetButton = styled(RefreshButton)``;
 
 const FeedMeta = styled.div`
     padding: 0 4px;
@@ -1127,17 +1096,17 @@ const PrimaryButton = styled.button`
 `;
 
 const PrimaryLink = styled(Link)`
-  min-height: 46px;
-  margin-top: 22px;
-  padding: 0 16px;
-  border-radius: ${({ theme }) => theme.radius.full};
-  background: linear-gradient(135deg, #7c3aed, #2563eb);
-  color: white;
-  display: inline-flex;
-  align-items: center;
-  font-weight: 900;
+    min-height: 46px;
+    margin-top: 22px;
+    padding: 0 16px;
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: linear-gradient(135deg, #7c3aed, #2563eb);
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    font-weight: 900;
 
-  &:hover {
-    filter: brightness(1.08);
-  }
+    &:hover {
+        filter: brightness(1.08);
+    }
 `;

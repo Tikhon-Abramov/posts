@@ -55,6 +55,7 @@ export function PremiumFeedPage() {
         isLoading,
         isFetching,
         isError,
+        error,
         refetch,
     } = useGetFeedQuery(
         {
@@ -68,6 +69,8 @@ export function PremiumFeedPage() {
         {
             skip: !hasPremium,
             refetchOnMountOrArgChange: true,
+            refetchOnFocus: true,
+            refetchOnReconnect: true,
         }
     );
 
@@ -338,36 +341,19 @@ export function PremiumFeedPage() {
 
                 <h1>Не удалось загрузить Premium</h1>
 
-                <p>Проверьте подключение или попробуйте повторить загрузку.</p>
+                <p>{getPremiumErrorMessage(error)}</p>
 
                 <PrimaryButton type="button" onClick={() => refetch()}>
                     Повторить
                 </PrimaryButton>
+
+                <SubscribeLink to="/subscription">Проверить подписку</SubscribeLink>
             </StateCard>
         );
     }
 
     return (
         <Page>
-            <Hero>
-                <HeroContent>
-                    <Eyebrow>Premium</Eyebrow>
-
-                    <Title>Закрытая лента</Title>
-
-                    <Subtitle>
-                        Premium-публикации подгружаются частями при прокрутке. Новые посты
-                        проверяются автоматически и появляются сверху без перезагрузки
-                        страницы.
-                    </Subtitle>
-                </HeroContent>
-
-                <HeroBadge>
-                    <FiStar />
-                    Active
-                </HeroBadge>
-            </Hero>
-
             <Toolbar>
                 <SearchBox>
                     <FiSearch />
@@ -407,7 +393,7 @@ export function PremiumFeedPage() {
             {visiblePosts.length ? (
                 <>
                     <FeedMeta>
-                        <span>Загружено: {visiblePosts.length} • Лента обновляется автоматически</span>
+                        <span>Загружено: {visiblePosts.length}</span>
 
                         {isLoadingMore && (
                             <LoadingInline>
@@ -470,32 +456,22 @@ function mergePostsKeepingFirstPriority(first: Post[], second: Post[]) {
     return result;
 }
 
+function getPremiumErrorMessage(error: unknown) {
+    if (
+        typeof error === 'object' &&
+        error !== null &&
+        'status' in error &&
+        (error as { status?: number }).status === 403
+    ) {
+        return 'Backend не подтвердил активную подписку. Откройте страницу подписки и активируйте доступ через backend.';
+    }
+
+    return 'Проверьте подключение или попробуйте повторить загрузку.';
+}
+
 const Page = styled.div`
     display: grid;
     gap: 18px;
-`;
-
-const Hero = styled.section`
-    padding: 22px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.lg};
-    background:
-            radial-gradient(circle at top left, rgba(236, 72, 153, 0.22), transparent 34%),
-            radial-gradient(circle at bottom right, rgba(124, 58, 237, 0.22), transparent 34%),
-            rgba(21, 25, 43, 0.84);
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 18px;
-
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        padding: 18px;
-        flex-direction: column;
-    }
-`;
-
-const HeroContent = styled.div`
-    min-width: 0;
 `;
 
 const Eyebrow = styled.div`
@@ -519,20 +495,6 @@ const Subtitle = styled.p`
     margin: 12px 0 0;
     color: ${({ theme }) => theme.colors.textMuted};
     line-height: 1.65;
-`;
-
-const HeroBadge = styled.div`
-    flex: 0 0 auto;
-    height: 42px;
-    padding: 0 14px;
-    border: 1px solid rgba(236, 72, 153, 0.36);
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(236, 72, 153, 0.12);
-    color: #fbcfe8;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    font-weight: 900;
 `;
 
 const Toolbar = styled.div`
@@ -809,6 +771,7 @@ const SecondaryButton = styled.button`
 
 const SubscribeLink = styled(Link)`
     min-height: 50px;
+    margin-top: 14px;
     padding: 0 20px;
     border-radius: ${({ theme }) => theme.radius.full};
     background: linear-gradient(135deg, #7c3aed, #ec4899);

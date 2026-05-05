@@ -1,20 +1,23 @@
-import { useEffect, useRef, useState } from 'react';
+/* eslint-disable react-hooks/set-state-in-effect */
+
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import styled from 'styled-components';
 import {
     FiAlertCircle,
-    FiFileText,
+    FiCheckCircle,
+    FiClock,
     FiFilter,
     FiGlobe,
     FiImage,
     FiInbox,
     FiLoader,
     FiLock,
-    FiRefreshCw,
     FiSearch,
     FiStar,
     FiUser,
     FiVideo,
+    FiXCircle,
 } from 'react-icons/fi';
 
 import type { AppDispatch, RootState } from '../app/store';
@@ -50,12 +53,12 @@ const REQUESTS_LIMIT = 10;
 
 export function MyPostsPage() {
     const dispatch = useDispatch<AppDispatch>();
-
     const postsLoadMoreRef = useRef<HTMLDivElement | null>(null);
     const requestsLoadMoreRef = useRef<HTMLDivElement | null>(null);
+    const isPostsFiltersMountedRef = useRef(false);
+    const isRequestsFiltersMountedRef = useRef(false);
 
     const { accessToken, user } = useSelector((state: RootState) => state.auth);
-
     const isAuth = Boolean(accessToken);
 
     const [activeTab, setActiveTab] = useState<TabMode>('POSTS');
@@ -76,7 +79,7 @@ export function MyPostsPage() {
     const [postsHasMore, setPostsHasMore] = useState(true);
 
     const [requestsCursor, setRequestsCursor] = useState<string | null>(null);
-    const [loadedRequests, setLoadedRequests] = useState<MockContentRequest[]>([]);
+    const [loadedRequests, setLoadedRequests] = useState<RequestWithFileUrl[]>([]);
     const [requestsNextCursor, setRequestsNextCursor] = useState<string | null>(
         null
     );
@@ -90,7 +93,7 @@ export function MyPostsPage() {
         refetch: refetchPosts,
     } = useGetMyPostsQuery(
         {
-            cursor: postsCursor,
+            cursor: postsCursor || undefined,
             limit: POSTS_LIMIT,
             search: postsSearchQuery,
             mediaType: postsMediaFilter,
@@ -98,6 +101,7 @@ export function MyPostsPage() {
         },
         {
             skip: !isAuth,
+            refetchOnMountOrArgChange: true,
         }
     );
 
@@ -107,6 +111,7 @@ export function MyPostsPage() {
         refetch: refetchPostsStats,
     } = useGetMyPostsStatsQuery(undefined, {
         skip: !isAuth,
+        refetchOnMountOrArgChange: true,
     });
 
     const {
@@ -117,7 +122,7 @@ export function MyPostsPage() {
         refetch: refetchRequests,
     } = useGetMyContentRequestsQuery(
         {
-            cursor: requestsCursor,
+            cursor: requestsCursor || undefined,
             limit: REQUESTS_LIMIT,
             search: requestsSearchQuery,
             status: requestsStatusFilter,
@@ -125,6 +130,7 @@ export function MyPostsPage() {
         },
         {
             skip: !isAuth,
+            refetchOnMountOrArgChange: true,
         }
     );
 
@@ -134,15 +140,62 @@ export function MyPostsPage() {
         refetch: refetchRequestsStats,
     } = useGetMyContentRequestsStatsQuery(undefined, {
         skip: !isAuth,
+        refetchOnMountOrArgChange: true,
     });
 
-    const isFirstPostsLoading = isPostsLoading && loadedPosts.length === 0;
-    const isPostsLoadingMore = isPostsFetching && loadedPosts.length > 0;
+    const dataPosts = useMemo(() => {
+        return postsData?.items || postsData?.posts || [];
+    }, [postsData]);
+
+    const visiblePosts = useMemo(() => {
+        if (loadedPosts.length) {
+            return loadedPosts;
+        }
+
+        return dataPosts;
+    }, [dataPosts, loadedPosts]);
+
+    const dataRequests = useMemo(() => {
+        return (requestsData?.items || requestsData?.requests || []) as RequestWithFileUrl[];
+    }, [requestsData]);
+
+    const visibleRequests = useMemo(() => {
+        if (loadedRequests.length) {
+            return loadedRequests;
+        }
+
+        return dataRequests;
+    }, [dataRequests, loadedRequests]);
+
+    const isFirstPostsLoading =
+        (isPostsLoading || isPostsFetching) && visiblePosts.length === 0 && !postsData;
+
+    const isPostsLoadingMore = isPostsFetching && visiblePosts.length > 0;
 
     const isFirstRequestsLoading =
-        isRequestsLoading && loadedRequests.length === 0;
+        (isRequestsLoading || isRequestsFetching) &&
+        visibleRequests.length === 0 &&
+        !requestsData;
+
     const isRequestsLoadingMore =
-        isRequestsFetching && loadedRequests.length > 0;
+        isRequestsFetching && visibleRequests.length > 0;
+
+    useEffect(() => {
+        if (!isAuth) {
+            return;
+        }
+
+        refetchPosts();
+        refetchPostsStats();
+        refetchRequests();
+        refetchRequestsStats();
+    }, [
+        isAuth,
+        refetchPosts,
+        refetchPostsStats,
+        refetchRequests,
+        refetchRequestsStats,
+    ]);
 
     useEffect(() => {
         if (!postsData) {
@@ -153,10 +206,10 @@ export function MyPostsPage() {
 
         setLoadedPosts((currentPosts) => {
             if (!postsCursor) {
-                return items;
+                return mergePostsKeepingFirstPriority(items, currentPosts);
             }
 
-            return mergePostsKeepingOrder(currentPosts, items);
+            return mergePostsKeepingFirstPriority(currentPosts, items);
         });
 
         setPostsNextCursor(postsData.nextCursor);
@@ -168,14 +221,16 @@ export function MyPostsPage() {
             return;
         }
 
-        const items = requestsData.items || requestsData.requests || [];
+        const items = (requestsData.items ||
+            requestsData.requests ||
+            []) as RequestWithFileUrl[];
 
         setLoadedRequests((currentRequests) => {
             if (!requestsCursor) {
-                return items;
+                return mergeRequestsKeepingFirstPriority(items, currentRequests);
             }
 
-            return mergeRequestsKeepingOrder(currentRequests, items);
+            return mergeRequestsKeepingFirstPriority(currentRequests, items);
         });
 
         setRequestsNextCursor(requestsData.nextCursor);
@@ -183,6 +238,11 @@ export function MyPostsPage() {
     }, [requestsCursor, requestsData]);
 
     useEffect(() => {
+        if (!isPostsFiltersMountedRef.current) {
+            isPostsFiltersMountedRef.current = true;
+            return;
+        }
+
         setPostsCursor(null);
         setLoadedPosts([]);
         setPostsNextCursor(null);
@@ -190,6 +250,11 @@ export function MyPostsPage() {
     }, [postsMediaFilter, postsSearchQuery, postsSortMode]);
 
     useEffect(() => {
+        if (!isRequestsFiltersMountedRef.current) {
+            isRequestsFiltersMountedRef.current = true;
+            return;
+        }
+
         setRequestsCursor(null);
         setLoadedRequests([]);
         setRequestsNextCursor(null);
@@ -275,12 +340,28 @@ export function MyPostsPage() {
         setPostsSearchQuery('');
         setPostsMediaFilter('ALL');
         setPostsSortMode('RECENT');
+
+        setPostsCursor(null);
+        setLoadedPosts([]);
+        setPostsNextCursor(null);
+        setPostsHasMore(true);
+
+        refetchPosts();
+        refetchPostsStats();
     };
 
     const resetRequestsFilters = () => {
         setRequestsSearchQuery('');
         setRequestsStatusFilter('ALL');
         setRequestsMediaFilter('ALL');
+
+        setRequestsCursor(null);
+        setLoadedRequests([]);
+        setRequestsNextCursor(null);
+        setRequestsHasMore(true);
+
+        refetchRequests();
+        refetchRequestsStats();
     };
 
     const refreshPosts = () => {
@@ -324,38 +405,10 @@ export function MyPostsPage() {
 
     return (
         <Page>
-            <Hero>
-                <HeroContent>
-                    <Eyebrow>Мой аккаунт</Eyebrow>
-
-                    <Title>Мои публикации</Title>
-
-                    <Subtitle>
-                        Здесь собраны ваши опубликованные посты и заявки на публикацию.
-                        Посты и заявки подгружаются частями, а счетчики берутся отдельными
-                        запросами.
-                    </Subtitle>
-                </HeroContent>
-
-                <HeroUser>
-                    <HeroAvatar>
-                        {getMediaUrl(user.avatarUrl) ? (
-                            <img src={getMediaUrl(user.avatarUrl) || ''} alt={user.nickname} />
-                        ) : (
-                            <FiUser />
-                        )}
-                    </HeroAvatar>
-
-                    <HeroUserText>
-                        <strong>@{user.nickname}</strong>
-                        <span>{user.hasPremium ? 'Premium аккаунт' : 'Обычный аккаунт'}</span>
-                    </HeroUserText>
-                </HeroUser>
-            </Hero>
-
             <StatsGrid>
                 <StatCard>
-                    <FiFileText />
+                    <FiFileTextIcon />
+
                     <div>
                         <strong>{isPostsStatsLoading ? '...' : postsStats?.total || 0}</strong>
                         <span>Публикаций</span>
@@ -364,6 +417,7 @@ export function MyPostsPage() {
 
                 <StatCard>
                     <FiGlobe />
+
                     <div>
                         <strong>
                             {isPostsStatsLoading ? '...' : postsStats?.publicPosts || 0}
@@ -374,6 +428,7 @@ export function MyPostsPage() {
 
                 <StatCard>
                     <FiStar />
+
                     <div>
                         <strong>
                             {isPostsStatsLoading ? '...' : postsStats?.premiumPosts || 0}
@@ -384,6 +439,7 @@ export function MyPostsPage() {
 
                 <StatCard>
                     <FiInbox />
+
                     <div>
                         <strong>
                             {isRequestsStatsLoading ? '...' : requestsStats?.total || 0}
@@ -399,7 +455,6 @@ export function MyPostsPage() {
                     $active={activeTab === 'POSTS'}
                     onClick={() => setActiveTab('POSTS')}
                 >
-                    <FiFileText />
                     Опубликованные посты
                 </TabButton>
 
@@ -408,7 +463,6 @@ export function MyPostsPage() {
                     $active={activeTab === 'REQUESTS'}
                     onClick={() => setActiveTab('REQUESTS')}
                 >
-                    <FiInbox />
                     Мои заявки
                 </TabButton>
             </Tabs>
@@ -421,7 +475,7 @@ export function MyPostsPage() {
 
                             <input
                                 value={postsSearchQuery}
-                                placeholder="Поиск по моим публикациям..."
+                                placeholder="Поиск по опубликованным постам..."
                                 onChange={(event) => setPostsSearchQuery(event.target.value)}
                             />
                         </SearchBox>
@@ -450,15 +504,12 @@ export function MyPostsPage() {
                         </Filters>
 
                         <ToolbarActions>
-                            <ResetButton type="button" onClick={resetPostsFilters}>
+                            <ToolbarButton type="button" onClick={resetPostsFilters}>
                                 <FiFilter />
                                 Сбросить
-                            </ResetButton>
+                            </ToolbarButton>
 
-                            <RefreshButton type="button" onClick={refreshPosts}>
-                                <FiRefreshCw />
-                                Обновить
-                            </RefreshButton>
+
                         </ToolbarActions>
                     </Toolbar>
 
@@ -470,7 +521,7 @@ export function MyPostsPage() {
 
                             <p>Сейчас покажем опубликованные вами посты.</p>
                         </StateCard>
-                    ) : isPostsError && !loadedPosts.length ? (
+                    ) : isPostsError && !visiblePosts.length ? (
                         <StateCard>
                             <FiAlertCircle />
 
@@ -482,10 +533,10 @@ export function MyPostsPage() {
                                 Повторить
                             </PrimaryButton>
                         </StateCard>
-                    ) : loadedPosts.length ? (
+                    ) : visiblePosts.length ? (
                         <>
                             <FeedMeta>
-                                <span>Загружено на странице: {loadedPosts.length}</span>
+                                <span>Загружено на странице: {visiblePosts.length}</span>
 
                                 {isPostsLoadingMore && (
                                     <LoadingInline>
@@ -496,7 +547,7 @@ export function MyPostsPage() {
                             </FeedMeta>
 
                             <PostsGrid>
-                                {loadedPosts.map((post) => (
+                                {visiblePosts.map((post) => (
                                     <PostCard key={post.id} post={post} />
                                 ))}
                             </PostsGrid>
@@ -516,7 +567,7 @@ export function MyPostsPage() {
                         </>
                     ) : (
                         <EmptyCard>
-                            <FiFileText />
+                            <FiUser />
 
                             <h2>Публикаций пока нет</h2>
 
@@ -529,22 +580,31 @@ export function MyPostsPage() {
                 </Section>
             ) : (
                 <Section>
-                    <RequestsStatsRow>
-                        <MiniStat>
-                            <strong>{isRequestsStatsLoading ? '...' : requestsStats?.pending || 0}</strong>
+                    <RequestStatsGrid>
+                        <MiniStatCard>
+                            <FiClock />
+                            <strong>
+                                {isRequestsStatsLoading ? '...' : requestsStats?.pending || 0}
+                            </strong>
                             <span>На проверке</span>
-                        </MiniStat>
+                        </MiniStatCard>
 
-                        <MiniStat>
-                            <strong>{isRequestsStatsLoading ? '...' : requestsStats?.approved || 0}</strong>
+                        <MiniStatCard>
+                            <FiCheckCircle />
+                            <strong>
+                                {isRequestsStatsLoading ? '...' : requestsStats?.approved || 0}
+                            </strong>
                             <span>Одобрено</span>
-                        </MiniStat>
+                        </MiniStatCard>
 
-                        <MiniStat>
-                            <strong>{isRequestsStatsLoading ? '...' : requestsStats?.rejected || 0}</strong>
+                        <MiniStatCard>
+                            <FiXCircle />
+                            <strong>
+                                {isRequestsStatsLoading ? '...' : requestsStats?.rejected || 0}
+                            </strong>
                             <span>Отклонено</span>
-                        </MiniStat>
-                    </RequestsStatsRow>
+                        </MiniStatCard>
+                    </RequestStatsGrid>
 
                     <Toolbar>
                         <SearchBox>
@@ -552,7 +612,7 @@ export function MyPostsPage() {
 
                             <input
                                 value={requestsSearchQuery}
-                                placeholder="Поиск по моим заявкам..."
+                                placeholder="Поиск по заявкам..."
                                 onChange={(event) => setRequestsSearchQuery(event.target.value)}
                             />
                         </SearchBox>
@@ -585,15 +645,12 @@ export function MyPostsPage() {
                         </Filters>
 
                         <ToolbarActions>
-                            <ResetButton type="button" onClick={resetRequestsFilters}>
+                            <ToolbarButton type="button" onClick={resetRequestsFilters}>
                                 <FiFilter />
                                 Сбросить
-                            </ResetButton>
+                            </ToolbarButton>
 
-                            <RefreshButton type="button" onClick={refreshRequests}>
-                                <FiRefreshCw />
-                                Обновить
-                            </RefreshButton>
+
                         </ToolbarActions>
                     </Toolbar>
 
@@ -605,7 +662,7 @@ export function MyPostsPage() {
 
                             <p>Сейчас покажем материалы, которые вы отправили админу.</p>
                         </StateCard>
-                    ) : isRequestsError && !loadedRequests.length ? (
+                    ) : isRequestsError && !visibleRequests.length ? (
                         <StateCard>
                             <FiAlertCircle />
 
@@ -617,10 +674,10 @@ export function MyPostsPage() {
                                 Повторить
                             </PrimaryButton>
                         </StateCard>
-                    ) : loadedRequests.length ? (
+                    ) : visibleRequests.length ? (
                         <>
                             <FeedMeta>
-                                <span>Загружено на странице: {loadedRequests.length}</span>
+                                <span>Загружено на странице: {visibleRequests.length}</span>
 
                                 {isRequestsLoadingMore && (
                                     <LoadingInline>
@@ -630,13 +687,13 @@ export function MyPostsPage() {
                                 )}
                             </FeedMeta>
 
-                            <RequestsGrid>
-                                {loadedRequests.map((request) => {
+                            <RequestsList>
+                                {visibleRequests.map((request) => {
                                     const previewUrl = getRequestPreviewUrl(request);
 
                                     return (
                                         <RequestCard key={request.id}>
-                                            <Preview>
+                                            <RequestPreview>
                                                 {request.mediaType === 'IMAGE' ? (
                                                     previewUrl ? (
                                                         <img src={previewUrl} alt={request.title} />
@@ -647,7 +704,7 @@ export function MyPostsPage() {
                                                         </PreviewPlaceholder>
                                                     )
                                                 ) : previewUrl ? (
-                                                    <MediaVideo src={previewUrl} controls />
+                                                    <video src={previewUrl} controls />
                                                 ) : (
                                                     <PreviewPlaceholder>
                                                         <FiVideo />
@@ -655,14 +712,14 @@ export function MyPostsPage() {
                                                     </PreviewPlaceholder>
                                                 )}
 
-                                                <StatusBadge $status={request.status}>
+                                                <RequestStatusBadge $status={request.status}>
                                                     {getStatusText(request.status)}
-                                                </StatusBadge>
-                                            </Preview>
+                                                </RequestStatusBadge>
+                                            </RequestPreview>
 
                                             <RequestBody>
-                                                <RequestHeader>
-                                                    <RequestTitle>{request.title}</RequestTitle>
+                                                <RequestTitleRow>
+                                                    <h2>{request.title}</h2>
 
                                                     <MediaBadge>
                                                         {request.mediaType === 'IMAGE' ? (
@@ -672,66 +729,61 @@ export function MyPostsPage() {
                                                         )}
                                                         {request.mediaType === 'IMAGE' ? 'Фото' : 'Видео'}
                                                     </MediaBadge>
-                                                </RequestHeader>
+                                                </RequestTitleRow>
 
                                                 {request.description ? (
-                                                    <RequestDescription>
-                                                        {request.description}
-                                                    </RequestDescription>
+                                                    <Description>{request.description}</Description>
                                                 ) : (
-                                                    <MutedDescription>Описание не указано</MutedDescription>
+                                                    <DescriptionMuted>Описание не указано</DescriptionMuted>
                                                 )}
 
-                                                <InfoList>
-                                                    <InfoItem>
-                                                        <strong>Предложено для:</strong>
-                                                        <span>
-                              {request.suggestedVisibility === 'PREMIUM'
-                                  ? 'Premium'
-                                  : 'Обычной ленты'}
-                            </span>
-                                                    </InfoItem>
+                                                <RequestInfoGrid>
+                                                    <InfoPill>
+                                                        <FiGlobe />
+                                                        Предложено для:{' '}
+                                                        {request.suggestedVisibility === 'PREMIUM'
+                                                            ? 'Premium'
+                                                            : 'Обычной ленты'}
+                                                    </InfoPill>
 
-                                                    <InfoItem>
-                                                        <strong>Файл:</strong>
-                                                        <span>{request.fileName}</span>
-                                                    </InfoItem>
+                                                    <InfoPill>
+                                                        <FiImage />
+                                                        Файл: {request.fileName}
+                                                    </InfoPill>
 
-                                                    <InfoItem>
-                                                        <strong>Размер:</strong>
-                                                        <span>{formatMockFileSize(request.fileSize)}</span>
-                                                    </InfoItem>
+                                                    <InfoPill>
+                                                        <FiFileSizeIcon />
+                                                        Размер: {formatMockFileSize(request.fileSize)}
+                                                    </InfoPill>
 
-                                                    <InfoItem>
-                                                        <strong>Создано:</strong>
-                                                        <span>
-                              {new Date(request.createdAt).toLocaleString('ru-RU')}
-                            </span>
-                                                    </InfoItem>
+                                                    <InfoPill>
+                                                        <FiClock />
+                                                        Создано:{' '}
+                                                        {new Date(request.createdAt).toLocaleString('ru-RU')}
+                                                    </InfoPill>
 
                                                     {request.reviewedAt && (
-                                                        <InfoItem>
-                                                            <strong>Проверено:</strong>
-                                                            <span>
-                                {new Date(request.reviewedAt).toLocaleString(
-                                    'ru-RU'
-                                )}
-                              </span>
-                                                        </InfoItem>
+                                                        <InfoPill>
+                                                            <FiCheckCircle />
+                                                            Проверено:{' '}
+                                                            {new Date(request.reviewedAt).toLocaleString(
+                                                                'ru-RU'
+                                                            )}
+                                                        </InfoPill>
                                                     )}
 
                                                     {request.publishedPostId && (
-                                                        <InfoItem>
-                                                            <strong>ID поста:</strong>
-                                                            <span>{request.publishedPostId}</span>
-                                                        </InfoItem>
+                                                        <InfoPill>
+                                                            <FiCheckCircle />
+                                                            Опубликовано
+                                                        </InfoPill>
                                                     )}
-                                                </InfoList>
+                                                </RequestInfoGrid>
                                             </RequestBody>
                                         </RequestCard>
                                     );
                                 })}
-                            </RequestsGrid>
+                            </RequestsList>
 
                             <LoadMoreAnchor ref={requestsLoadMoreRef}>
                                 {requestsHasMore ? (
@@ -764,27 +816,43 @@ export function MyPostsPage() {
     );
 }
 
-function mergePostsKeepingOrder(first: Post[], second: Post[]) {
-    const map = new Map<number, Post>();
+function mergePostsKeepingFirstPriority(first: Post[], second: Post[]) {
+    const result: Post[] = [];
+    const seen = new Set<number>();
 
     [...first, ...second].forEach((post) => {
-        map.set(post.id, post);
+        if (seen.has(post.id)) {
+            return;
+        }
+
+        seen.add(post.id);
+        result.push(post);
     });
 
-    return Array.from(map.values());
+    return result;
 }
 
-function mergeRequestsKeepingOrder(
-    first: MockContentRequest[],
-    second: MockContentRequest[]
+function mergeRequestsKeepingFirstPriority(
+    first: RequestWithFileUrl[],
+    second: RequestWithFileUrl[]
 ) {
-    const map = new Map<number, MockContentRequest>();
+    const result: RequestWithFileUrl[] = [];
+    const seen = new Set<number>();
 
     [...first, ...second].forEach((request) => {
-        map.set(request.id, request);
+        if (seen.has(request.id)) {
+            return;
+        }
+
+        seen.add(request.id);
+        result.push(request);
     });
 
-    return Array.from(map.values());
+    return result;
+}
+
+function getRequestPreviewUrl(request: RequestWithFileUrl) {
+    return getMediaUrl(request.previewUrl || request.fileUrl || null);
 }
 
 function getStatusText(status: RequestStatus) {
@@ -799,116 +867,17 @@ function getStatusText(status: RequestStatus) {
     return 'Отклонено';
 }
 
-function getRequestPreviewUrl(request: MockContentRequest) {
-    const requestWithFileUrl = request as RequestWithFileUrl;
-
-    return getMediaUrl(request.previewUrl || requestWithFileUrl.fileUrl || null);
-}
+const FiFileTextIcon = FiUser;
+const FiFileSizeIcon = FiImage;
 
 const Page = styled.div`
     display: grid;
     gap: 18px;
 `;
 
-const Hero = styled.section`
-    padding: 22px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.lg};
-    background:
-            radial-gradient(circle at top left, rgba(124, 58, 237, 0.24), transparent 34%),
-            radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.16), transparent 34%),
-            rgba(21, 25, 43, 0.86);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
+const Section = styled.section`
+    display: grid;
     gap: 18px;
-
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        align-items: flex-start;
-        flex-direction: column;
-        padding: 18px;
-    }
-`;
-
-const HeroContent = styled.div`
-    min-width: 0;
-`;
-
-const Eyebrow = styled.div`
-    margin-bottom: 8px;
-    color: ${({ theme }) => theme.colors.primaryHover};
-    font-size: 13px;
-    font-weight: 900;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-`;
-
-const Title = styled.h1`
-    margin: 0;
-    font-size: clamp(30px, 5vw, 52px);
-    line-height: 0.96;
-    letter-spacing: -0.075em;
-`;
-
-const Subtitle = styled.p`
-    max-width: 760px;
-    margin: 12px 0 0;
-    color: ${({ theme }) => theme.colors.textMuted};
-    line-height: 1.65;
-`;
-
-const HeroUser = styled.div`
-    flex: 0 0 auto;
-    min-width: 230px;
-    padding: 13px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: 22px;
-    background: rgba(255, 255, 255, 0.04);
-    display: flex;
-    align-items: center;
-    gap: 11px;
-
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        width: 100%;
-        min-width: 0;
-    }
-`;
-
-const HeroAvatar = styled.div`
-    flex: 0 0 auto;
-    width: 52px;
-    height: 52px;
-    overflow: hidden;
-    border-radius: 18px;
-    background: linear-gradient(135deg, #7c3aed, #2563eb);
-    color: white;
-    display: grid;
-    place-items: center;
-    font-size: 24px;
-
-    img {
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-    }
-`;
-
-const HeroUserText = styled.div`
-    min-width: 0;
-    display: grid;
-    gap: 3px;
-
-    strong {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    span {
-        color: ${({ theme }) => theme.colors.textMuted};
-        font-size: 12px;
-        font-weight: 800;
-    }
 `;
 
 const StatsGrid = styled.div`
@@ -944,6 +913,7 @@ const StatCard = styled.article`
     }
 
     div {
+        min-width: 0;
         display: grid;
         gap: 2px;
     }
@@ -964,47 +934,26 @@ const StatCard = styled.article`
 const Tabs = styled.div`
     padding: 8px;
     border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.full};
+    border-radius: 22px;
     background: rgba(21, 25, 43, 0.76);
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
-
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        border-radius: 22px;
-        flex-direction: column;
-    }
 `;
 
 const TabButton = styled.button<{ $active?: boolean }>`
-    flex: 1;
-    min-height: 46px;
+    min-height: 42px;
     padding: 0 16px;
     border: 1px solid
     ${({ theme, $active }) =>
-            $active ? 'rgba(139, 92, 246, 0.58)' : theme.colors.border};
+            $active ? 'rgba(139, 92, 246, 0.62)' : theme.colors.border};
     border-radius: ${({ theme }) => theme.radius.full};
     background: ${({ $active }) =>
             $active
                     ? 'linear-gradient(135deg, rgba(124, 58, 237, 0.82), rgba(37, 99, 235, 0.72))'
                     : 'rgba(255, 255, 255, 0.045)'};
     color: ${({ theme }) => theme.colors.text};
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 9px;
     font-weight: 900;
-
-    &:hover {
-        background: ${({ $active }) =>
-                $active
-                        ? 'linear-gradient(135deg, rgba(124, 58, 237, 0.9), rgba(37, 99, 235, 0.8))'
-                        : 'rgba(255, 255, 255, 0.08)'};
-    }
-`;
-
-const Section = styled.section`
-    display: grid;
-    gap: 16px;
 `;
 
 const Toolbar = styled.div`
@@ -1033,11 +982,6 @@ const SearchBox = styled.div`
     align-items: center;
     gap: 10px;
 
-    svg {
-        flex: 0 0 auto;
-        font-size: 18px;
-    }
-
     input {
         width: 100%;
         min-width: 0;
@@ -1045,15 +989,6 @@ const SearchBox = styled.div`
         outline: none;
         background: transparent;
         color: ${({ theme }) => theme.colors.text};
-    }
-
-    input::placeholder {
-        color: rgba(156, 163, 183, 0.68);
-    }
-
-    &:focus-within {
-        border-color: rgba(139, 92, 246, 0.72);
-        box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.12);
     }
 `;
 
@@ -1081,10 +1016,6 @@ const FilterSelect = styled.select`
         background: #101322;
         color: white;
     }
-
-    &:focus {
-        border-color: rgba(139, 92, 246, 0.72);
-    }
 `;
 
 const ToolbarActions = styled.div`
@@ -1097,7 +1028,7 @@ const ToolbarActions = styled.div`
     }
 `;
 
-const ResetButton = styled.button`
+const ToolbarButton = styled.button`
     min-height: 46px;
     padding: 0 16px;
     border: 1px solid ${({ theme }) => theme.colors.border};
@@ -1109,43 +1040,6 @@ const ResetButton = styled.button`
     justify-content: center;
     gap: 9px;
     font-weight: 900;
-
-    &:hover {
-        background: rgba(255, 255, 255, 0.09);
-        border-color: rgba(139, 92, 246, 0.45);
-    }
-`;
-
-const RefreshButton = styled(ResetButton)``;
-
-const RequestsStatsRow = styled.div`
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 12px;
-
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        grid-template-columns: 1fr;
-    }
-`;
-
-const MiniStat = styled.div`
-    padding: 14px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: 18px;
-    background: rgba(21, 25, 43, 0.74);
-    display: grid;
-    gap: 4px;
-
-    strong {
-        font-size: 26px;
-        letter-spacing: -0.05em;
-    }
-
-    span {
-        color: ${({ theme }) => theme.colors.textMuted};
-        font-size: 13px;
-        font-weight: 800;
-    }
 `;
 
 const FeedMeta = styled.div`
@@ -1157,11 +1051,6 @@ const FeedMeta = styled.div`
     gap: 12px;
     font-size: 13px;
     font-weight: 800;
-
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        align-items: flex-start;
-        flex-direction: column;
-    }
 `;
 
 const LoadingInline = styled.div`
@@ -1186,25 +1075,61 @@ const PostsGrid = styled.div`
     gap: 18px;
 `;
 
-const RequestsGrid = styled.div`
+const RequestStatsGrid = styled.div`
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        grid-template-columns: 1fr;
+    }
+`;
+
+const MiniStatCard = styled.article`
+    min-height: 86px;
+    padding: 14px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: 18px;
+    background: rgba(21, 25, 43, 0.76);
+    display: grid;
+    gap: 5px;
+
+    svg {
+        color: ${({ theme }) => theme.colors.primaryHover};
+        font-size: 22px;
+    }
+
+    strong {
+        font-size: 28px;
+        line-height: 1;
+    }
+
+    span {
+        color: ${({ theme }) => theme.colors.textMuted};
+        font-size: 13px;
+        font-weight: 800;
+    }
+`;
+
+const RequestsList = styled.div`
     display: grid;
     gap: 14px;
 `;
 
 const RequestCard = styled.article`
-    overflow: hidden;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.lg};
-    background: rgba(21, 25, 43, 0.84);
-    display: grid;
-    grid-template-columns: 260px minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background: rgba(21, 25, 43, 0.84);
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
 
-    @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
-        grid-template-columns: 1fr;
-    }
+  @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
+    grid-template-columns: 1fr;
+  }
 `;
 
-const Preview = styled.div`
+const RequestPreview = styled.div`
     position: relative;
     min-height: 230px;
     background: #05060d;
@@ -1219,35 +1144,32 @@ const Preview = styled.div`
     }
 `;
 
-const MediaVideo = styled.video`
-    background: #05060d;
-`;
-
 const PreviewPlaceholder = styled.div`
-    min-height: 230px;
-    padding: 24px;
-    background:
-            radial-gradient(circle at top left, rgba(124, 58, 237, 0.28), transparent 34%),
-            radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.18), transparent 34%),
-            #080a12;
-    color: ${({ theme }) => theme.colors.primaryHover};
-    display: grid;
-    place-content: center;
-    justify-items: center;
-    gap: 10px;
-    text-align: center;
-    font-weight: 900;
+  min-height: 230px;
+  background:
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.28), transparent 34%),
+    radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.18), transparent 34%),
+    #080a12;
+  color: ${({ theme }) => theme.colors.primaryHover};
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  text-align: center;
+  font-weight: 900;
 
-    svg {
-        font-size: 44px;
-    }
+  svg {
+    font-size: 44px;
+  }
 
-    span {
-        color: ${({ theme }) => theme.colors.textMuted};
-    }
+  span {
+    max-width: 210px;
+    color: ${({ theme }) => theme.colors.textMuted};
+    word-break: break-word;
+  }
 `;
 
-const StatusBadge = styled.div<{ $status: RequestStatus }>`
+const RequestStatusBadge = styled.div<{ $status: RequestStatus }>`
     position: absolute;
     left: 12px;
     top: 12px;
@@ -1256,14 +1178,14 @@ const StatusBadge = styled.div<{ $status: RequestStatus }>`
     border-radius: ${({ theme }) => theme.radius.full};
     background: ${({ $status }) => {
         if ($status === 'APPROVED') {
-            return 'rgba(34, 197, 94, 0.86)';
+            return 'rgba(34, 197, 94, 0.88)';
         }
 
         if ($status === 'REJECTED') {
-            return 'rgba(239, 68, 68, 0.86)';
+            return 'rgba(239, 68, 68, 0.88)';
         }
 
-        return 'rgba(245, 158, 11, 0.9)';
+        return 'rgba(245, 158, 11, 0.92)';
     }};
     color: white;
     display: inline-flex;
@@ -1280,21 +1202,21 @@ const RequestBody = styled.div`
     gap: 14px;
 `;
 
-const RequestHeader = styled.div`
+const RequestTitleRow = styled.div`
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
     gap: 14px;
 
+    h2 {
+        margin: 0;
+        font-size: 25px;
+        letter-spacing: -0.055em;
+    }
+
     @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
         flex-direction: column;
     }
-`;
-
-const RequestTitle = styled.h2`
-    margin: 0;
-    font-size: 25px;
-    letter-spacing: -0.055em;
 `;
 
 const MediaBadge = styled.div`
@@ -1311,53 +1233,40 @@ const MediaBadge = styled.div`
     font-weight: 900;
 `;
 
-const RequestDescription = styled.p`
+const Description = styled.p`
     margin: 0;
     color: ${({ theme }) => theme.colors.textMuted};
     line-height: 1.6;
     white-space: pre-wrap;
 `;
 
-const MutedDescription = styled(RequestDescription)`
+const DescriptionMuted = styled(Description)`
     opacity: 0.68;
     font-style: italic;
 `;
 
-const InfoList = styled.div`
-    display: grid;
+const RequestInfoGrid = styled.div`
+    display: flex;
+    flex-wrap: wrap;
     gap: 8px;
 `;
 
-const InfoItem = styled.div`
-    padding: 10px 12px;
+const InfoPill = styled.div`
+    min-height: 36px;
+    padding: 0 11px;
     border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: 14px;
-    background: rgba(255, 255, 255, 0.035);
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 14px;
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: rgba(255, 255, 255, 0.04);
+    color: ${({ theme }) => theme.colors.textMuted};
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 800;
 
-    strong {
-        color: ${({ theme }) => theme.colors.text};
-        font-size: 13px;
-    }
-
-    span {
-        min-width: 0;
-        color: ${({ theme }) => theme.colors.textMuted};
-        font-size: 13px;
-        text-align: right;
-        word-break: break-word;
-    }
-
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        flex-direction: column;
-        gap: 4px;
-
-        span {
-            text-align: left;
-        }
+    svg {
+        flex: 0 0 auto;
+        color: ${({ theme }) => theme.colors.primaryHover};
     }
 `;
 
@@ -1398,13 +1307,11 @@ const EndMessage = styled.div`
 `;
 
 const EmptyCard = styled.section`
-    min-height: 380px;
+    min-height: 420px;
     padding: 30px 22px;
     border: 1px dashed rgba(139, 92, 246, 0.34);
     border-radius: ${({ theme }) => theme.radius.lg};
-    background:
-            radial-gradient(circle at top left, rgba(124, 58, 237, 0.18), transparent 34%),
-            rgba(21, 25, 43, 0.74);
+    background: rgba(21, 25, 43, 0.74);
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -1432,16 +1339,10 @@ const EmptyCard = styled.section`
 `;
 
 const StateCard = styled(EmptyCard)`
-    min-height: 420px;
+    border-style: solid;
 
     > svg {
-        animation: spin 0.8s linear infinite;
-    }
-
-    @keyframes spin {
-        to {
-            transform: rotate(360deg);
-        }
+        animation: none;
     }
 `;
 

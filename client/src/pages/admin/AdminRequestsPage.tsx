@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import styled from 'styled-components';
 import {
     FiAlertCircle,
@@ -9,47 +9,39 @@ import {
     FiImage,
     FiInbox,
     FiLoader,
-    FiRefreshCw,
     FiSearch,
     FiStar,
     FiTrash2,
-    FiUser,
     FiVideo,
     FiXCircle,
 } from 'react-icons/fi';
 
+import { getMediaUrl } from '../../shared/lib/getMediaUrl';
 import type { PostVisibility } from '../../entities/post/model/postTypes';
 import {
+    type AdminContentRequest,
+    type MediaFilter,
+    type RequestStatus,
+    type RequestStatusFilter,
     useApproveContentRequestMutation,
     useDeleteContentRequestMutation,
     useGetAdminContentRequestsQuery,
     useGetAdminContentRequestsStatsQuery,
     useRejectContentRequestMutation,
 } from '../../entities/admin/api/adminContentRequestApi';
-import {
-    formatMockFileSize,
-    type MediaFilter,
-    type MockContentRequest,
-    type RequestStatus,
-    type RequestStatusFilter,
-} from '../../shared/lib/mockStorage';
-import { getMediaUrl } from '../../shared/lib/getMediaUrl';
-
-type RequestWithFileUrl = MockContentRequest & {
-    fileUrl?: string | null;
-};
 
 const REQUESTS_LIMIT = 12;
 
 export function AdminRequestsPage() {
     const loadMoreRef = useRef<HTMLDivElement | null>(null);
+    const isFiltersMountedRef = useRef(false);
 
     const [searchQuery, setSearchQuery] = useState('');
     const [statusFilter, setStatusFilter] = useState<RequestStatusFilter>('ALL');
     const [mediaFilter, setMediaFilter] = useState<MediaFilter>('ALL');
 
     const [cursor, setCursor] = useState<string | null>(null);
-    const [loadedRequests, setLoadedRequests] = useState<MockContentRequest[]>([]);
+    const [loadedRequests, setLoadedRequests] = useState<AdminContentRequest[]>([]);
     const [nextCursor, setNextCursor] = useState<string | null>(null);
     const [hasMore, setHasMore] = useState(true);
 
@@ -59,19 +51,26 @@ export function AdminRequestsPage() {
         isFetching,
         isError,
         refetch: refetchRequests,
-    } = useGetAdminContentRequestsQuery({
-        cursor,
-        limit: REQUESTS_LIMIT,
-        search: searchQuery,
-        status: statusFilter,
-        mediaType: mediaFilter,
-    });
+    } = useGetAdminContentRequestsQuery(
+        {
+            cursor: cursor || undefined,
+            limit: REQUESTS_LIMIT,
+            search: searchQuery,
+            status: statusFilter,
+            mediaType: mediaFilter,
+        },
+        {
+            refetchOnMountOrArgChange: true,
+        }
+    );
 
     const {
         data: stats,
         isLoading: isStatsLoading,
         refetch: refetchStats,
-    } = useGetAdminContentRequestsStatsQuery();
+    } = useGetAdminContentRequestsStatsQuery(undefined, {
+        refetchOnMountOrArgChange: true,
+    });
 
     const [approveContentRequest, { isLoading: isApproving }] =
         useApproveContentRequestMutation();
@@ -82,9 +81,29 @@ export function AdminRequestsPage() {
     const [deleteContentRequest, { isLoading: isDeleting }] =
         useDeleteContentRequestMutation();
 
+    const dataRequests = useMemo(() => {
+        return data?.items || data?.requests || [];
+    }, [data]);
+
+    const visibleRequests = useMemo(() => {
+        if (loadedRequests.length) {
+            return loadedRequests;
+        }
+
+        return dataRequests;
+    }, [dataRequests, loadedRequests]);
+
+    const isFirstLoading =
+        (isLoading || isFetching) && visibleRequests.length === 0 && !data;
+
+    const isLoadingMore = isFetching && visibleRequests.length > 0;
+
     const isActionLoading = isApproving || isRejecting || isDeleting;
-    const isFirstLoading = isLoading && loadedRequests.length === 0;
-    const isLoadingMore = isFetching && loadedRequests.length > 0;
+
+    useEffect(() => {
+        refetchRequests();
+        refetchStats();
+    }, [refetchRequests, refetchStats]);
 
     useEffect(() => {
         if (!data) {
@@ -95,10 +114,10 @@ export function AdminRequestsPage() {
 
         setLoadedRequests((currentRequests) => {
             if (!cursor) {
-                return items;
+                return mergeRequestsKeepingFirstPriority(items, currentRequests);
             }
 
-            return mergeRequestsKeepingOrder(currentRequests, items);
+            return mergeRequestsKeepingFirstPriority(currentRequests, items);
         });
 
         setNextCursor(data.nextCursor);
@@ -106,6 +125,11 @@ export function AdminRequestsPage() {
     }, [cursor, data]);
 
     useEffect(() => {
+        if (!isFiltersMountedRef.current) {
+            isFiltersMountedRef.current = true;
+            return;
+        }
+
         setCursor(null);
         setLoadedRequests([]);
         setNextCursor(null);
@@ -145,6 +169,20 @@ export function AdminRequestsPage() {
         };
     }, [hasMore, isFetching, nextCursor]);
 
+    const resetFilters = () => {
+        setSearchQuery('');
+        setStatusFilter('ALL');
+        setMediaFilter('ALL');
+
+        setCursor(null);
+        setLoadedRequests([]);
+        setNextCursor(null);
+        setHasMore(true);
+
+        refetchRequests();
+        refetchStats();
+    };
+
     const handleRefresh = () => {
         setCursor(null);
         setLoadedRequests([]);
@@ -155,54 +193,81 @@ export function AdminRequestsPage() {
         refetchStats();
     };
 
-    const resetFilters = () => {
-        setSearchQuery('');
-        setStatusFilter('ALL');
-        setMediaFilter('ALL');
-    };
-
     const handleApprove = async (
-        requestId: number,
+        request: AdminContentRequest,
         visibility: PostVisibility
     ) => {
         try {
             await approveContentRequest({
-                requestId,
+                requestId: request.id,
                 visibility,
             }).unwrap();
 
-            handleRefresh();
+            setLoadedRequests((currentRequests) =>
+                currentRequests.map((item) =>
+                    item.id === request.id
+                        ? {
+                            ...item,
+                            status: 'APPROVED',
+                            suggestedVisibility: visibility,
+                            reviewedAt: new Date().toISOString(),
+                        }
+                        : item
+                )
+            );
+
+            refetchRequests();
+            refetchStats();
         } catch (error) {
             window.alert(getErrorMessage(error, 'Не удалось одобрить заявку.'));
         }
     };
 
-    const handleReject = async (requestId: number) => {
-        try {
-            await rejectContentRequest(requestId).unwrap();
-
-            handleRefresh();
-        } catch (error) {
-            window.alert(getErrorMessage(error, 'Не удалось отклонить заявку.'));
-        }
-    };
-
-    const handleDelete = async (requestId: number) => {
-        const isConfirmed = window.confirm('Удалить заявку из списка?');
+    const handleReject = async (request: AdminContentRequest) => {
+        const isConfirmed = window.confirm(`Отклонить заявку «${request.title}»?`);
 
         if (!isConfirmed) {
             return;
         }
 
         try {
-            await deleteContentRequest(requestId).unwrap();
+            await rejectContentRequest(request.id).unwrap();
 
             setLoadedRequests((currentRequests) =>
-                currentRequests.filter((request) => request.id !== requestId)
+                currentRequests.map((item) =>
+                    item.id === request.id
+                        ? {
+                            ...item,
+                            status: 'REJECTED',
+                            reviewedAt: new Date().toISOString(),
+                        }
+                        : item
+                )
             );
 
-            refetchStats();
             refetchRequests();
+            refetchStats();
+        } catch (error) {
+            window.alert(getErrorMessage(error, 'Не удалось отклонить заявку.'));
+        }
+    };
+
+    const handleDelete = async (request: AdminContentRequest) => {
+        const isConfirmed = window.confirm(`Удалить заявку «${request.title}»?`);
+
+        if (!isConfirmed) {
+            return;
+        }
+
+        try {
+            await deleteContentRequest(request.id).unwrap();
+
+            setLoadedRequests((currentRequests) =>
+                currentRequests.filter((item) => item.id !== request.id)
+            );
+
+            refetchRequests();
+            refetchStats();
         } catch (error) {
             window.alert(getErrorMessage(error, 'Не удалось удалить заявку.'));
         }
@@ -210,28 +275,19 @@ export function AdminRequestsPage() {
 
     return (
         <Page>
-            <Hero>
-                <HeroContent>
-                    <Eyebrow>Admin</Eyebrow>
-
-                    <Title>Заявки пользователей</Title>
-
-                    <Subtitle>
-                        Здесь админ проверяет предложенные фото и видео. Заявки
-                        подгружаются частями, а счетчики берутся отдельным запросом.
-                        Одобренный пост публикуется от имени пользователя, который отправил
-                        материал.
-                    </Subtitle>
-                </HeroContent>
-
-                <HeroIcon>
-                    <FiInbox />
-                </HeroIcon>
-            </Hero>
-
             <StatsGrid>
                 <StatCard>
+                    <FiInbox />
+
+                    <div>
+                        <strong>{isStatsLoading ? '...' : stats?.total || 0}</strong>
+                        <span>Всего заявок</span>
+                    </div>
+                </StatCard>
+
+                <StatCard>
                     <FiClock />
+
                     <div>
                         <strong>{isStatsLoading ? '...' : stats?.pending || 0}</strong>
                         <span>На проверке</span>
@@ -240,25 +296,19 @@ export function AdminRequestsPage() {
 
                 <StatCard>
                     <FiCheckCircle />
+
                     <div>
                         <strong>{isStatsLoading ? '...' : stats?.approved || 0}</strong>
-                        <span>Опубликовано</span>
+                        <span>Одобрено</span>
                     </div>
                 </StatCard>
 
                 <StatCard>
                     <FiXCircle />
+
                     <div>
                         <strong>{isStatsLoading ? '...' : stats?.rejected || 0}</strong>
                         <span>Отклонено</span>
-                    </div>
-                </StatCard>
-
-                <StatCard>
-                    <FiInbox />
-                    <div>
-                        <strong>{isStatsLoading ? '...' : stats?.total || 0}</strong>
-                        <span>Всего заявок</span>
                     </div>
                 </StatCard>
             </StatsGrid>
@@ -269,7 +319,7 @@ export function AdminRequestsPage() {
 
                     <input
                         value={searchQuery}
-                        placeholder="Поиск по ID, названию, описанию, файлу или автору..."
+                        placeholder="Поиск по названию, описанию, пользователю или ID..."
                         onChange={(event) => setSearchQuery(event.target.value)}
                     />
                 </SearchBox>
@@ -289,9 +339,7 @@ export function AdminRequestsPage() {
 
                     <FilterSelect
                         value={mediaFilter}
-                        onChange={(event) =>
-                            setMediaFilter(event.target.value as MediaFilter)
-                        }
+                        onChange={(event) => setMediaFilter(event.target.value as MediaFilter)}
                     >
                         <option value="ALL">Фото и видео</option>
                         <option value="IMAGE">Только фото</option>
@@ -305,10 +353,7 @@ export function AdminRequestsPage() {
                         Сбросить
                     </ResetButton>
 
-                    <RefreshButton type="button" onClick={handleRefresh}>
-                        <FiRefreshCw />
-                        Обновить
-                    </RefreshButton>
+
                 </ToolbarActions>
             </Toolbar>
 
@@ -318,12 +363,9 @@ export function AdminRequestsPage() {
 
                     <h2>Загружаем заявки</h2>
 
-                    <p>
-                        Сейчас покажем материалы, которые пользователи отправили на
-                        проверку.
-                    </p>
+                    <p>Сейчас покажем материалы пользователей.</p>
                 </StateCard>
-            ) : isError && !loadedRequests.length ? (
+            ) : isError && !visibleRequests.length ? (
                 <StateCard>
                     <FiAlertCircle />
 
@@ -335,10 +377,10 @@ export function AdminRequestsPage() {
                         Повторить
                     </PrimaryButton>
                 </StateCard>
-            ) : loadedRequests.length ? (
+            ) : visibleRequests.length ? (
                 <>
                     <FeedMeta>
-                        <span>Загружено на странице: {loadedRequests.length}</span>
+                        <span>Загружено на странице: {visibleRequests.length}</span>
 
                         {isLoadingMore && (
                             <LoadingInline>
@@ -348,58 +390,46 @@ export function AdminRequestsPage() {
                         )}
                     </FeedMeta>
 
-                    <RequestsGrid>
-                        {loadedRequests.map((request) => {
+                    <RequestsList>
+                        {visibleRequests.map((request) => {
                             const previewUrl = getRequestPreviewUrl(request);
 
                             return (
-                                <RequestCard key={request.id}>
+                                <RequestRow key={request.id}>
                                     <Preview>
-                                        {request.mediaType === 'IMAGE' ? (
-                                            previewUrl ? (
-                                                <img src={previewUrl} alt={request.title} />
-                                            ) : (
-                                                <Placeholder>
-                                                    <FiImage />
-                                                    <span>Изображение без preview</span>
-                                                </Placeholder>
-                                            )
-                                        ) : previewUrl ? (
+                                        {request.mediaType === 'IMAGE' && previewUrl ? (
+                                            <img src={previewUrl} alt={request.title} />
+                                        ) : request.mediaType === 'VIDEO' && previewUrl ? (
                                             <MediaVideo src={previewUrl} controls />
                                         ) : (
-                                            <Placeholder>
-                                                <FiVideo />
-                                                <span>Видео: {request.fileName}</span>
-                                            </Placeholder>
+                                            <VideoPreview>
+                                                {request.mediaType === 'VIDEO' ? <FiVideo /> : <FiImage />}
+                                                <span>Медиа недоступно</span>
+                                            </VideoPreview>
                                         )}
 
                                         <StatusBadge $status={request.status}>
+                                            {getStatusIcon(request.status)}
                                             {getStatusText(request.status)}
                                         </StatusBadge>
                                     </Preview>
 
-                                    <CardBody>
-                                        <CardHeader>
-                                            <AuthorBlock>
-                                                <AuthorAvatar>
-                                                    <FiUser />
-                                                </AuthorAvatar>
+                                    <RequestBody>
+                                        <RequestTop>
+                                            <RequestTitleBlock>
+                                                <RequestTitle>{request.title}</RequestTitle>
 
-                                                <div>
-                                                    <RequestTitle>{request.title}</RequestTitle>
-
-                                                    <Meta>
-                                                        ID {request.id} • @{request.userNickname} •{' '}
-                                                        {new Date(request.createdAt).toLocaleString('ru-RU')}
-                                                    </Meta>
-                                                </div>
-                                            </AuthorBlock>
+                                                <RequestMeta>
+                                                    ID {request.id} • @{request.userNickname} •{' '}
+                                                    {new Date(request.createdAt).toLocaleString('ru-RU')}
+                                                </RequestMeta>
+                                            </RequestTitleBlock>
 
                                             <MediaBadge>
-                                                {request.mediaType === 'IMAGE' ? <FiImage /> : <FiVideo />}
-                                                {request.mediaType === 'IMAGE' ? 'Фото' : 'Видео'}
+                                                {request.mediaType === 'VIDEO' ? <FiVideo /> : <FiImage />}
+                                                {request.mediaType === 'VIDEO' ? 'Видео' : 'Фото'}
                                             </MediaBadge>
-                                        </CardHeader>
+                                        </RequestTop>
 
                                         {request.description ? (
                                             <Description>{request.description}</Description>
@@ -407,94 +437,83 @@ export function AdminRequestsPage() {
                                             <DescriptionMuted>Описание не указано</DescriptionMuted>
                                         )}
 
-                                        <InfoList>
+                                        <InfoGrid>
                                             <InfoItem>
-                                                <strong>Автор публикации:</strong>
-                                                <span>@{request.userNickname}</span>
+                                                <FiGlobe />
+                                                Предложено:{' '}
+                                                {request.suggestedVisibility === 'PREMIUM'
+                                                    ? 'Premium'
+                                                    : 'Обычная'}
                                             </InfoItem>
 
                                             <InfoItem>
-                                                <strong>Предложено для:</strong>
-                                                <span>
-                          {request.suggestedVisibility === 'PREMIUM'
-                              ? 'Premium'
-                              : 'Обычной ленты'}
-                        </span>
+                                                <FiImage />
+                                                {request.fileName}
                                             </InfoItem>
 
                                             <InfoItem>
-                                                <strong>Файл:</strong>
-                                                <span>{request.fileName}</span>
+                                                <FiClock />
+                                                {request.reviewedAt
+                                                    ? `Проверено: ${new Date(
+                                                        request.reviewedAt
+                                                    ).toLocaleString('ru-RU')}`
+                                                    : 'Еще не проверено'}
                                             </InfoItem>
-
-                                            <InfoItem>
-                                                <strong>Размер:</strong>
-                                                <span>{formatMockFileSize(request.fileSize)}</span>
-                                            </InfoItem>
-
-                                            {request.reviewedAt && (
-                                                <InfoItem>
-                                                    <strong>Проверено:</strong>
-                                                    <span>
-                            {new Date(request.reviewedAt).toLocaleString('ru-RU')}
-                          </span>
-                                                </InfoItem>
-                                            )}
 
                                             {request.publishedPostId && (
                                                 <InfoItem>
-                                                    <strong>ID поста:</strong>
-                                                    <span>{request.publishedPostId}</span>
+                                                    <FiCheckCircle />
+                                                    Пост ID {request.publishedPostId}
                                                 </InfoItem>
                                             )}
-                                        </InfoList>
+                                        </InfoGrid>
 
-                                        {request.status === 'PENDING' ? (
-                                            <Actions>
-                                                <ApproveButton
-                                                    type="button"
-                                                    disabled={isActionLoading}
-                                                    onClick={() => handleApprove(request.id, 'PUBLIC')}
-                                                >
-                                                    <FiGlobe />
-                                                    В обычную ленту
-                                                </ApproveButton>
+                                        <Actions>
+                                            {request.status === 'PENDING' && (
+                                                <>
+                                                    <ApproveButton
+                                                        type="button"
+                                                        disabled={isActionLoading}
+                                                        onClick={() => handleApprove(request, 'PUBLIC')}
+                                                    >
+                                                        <FiGlobe />
+                                                        В обычную
+                                                    </ApproveButton>
 
-                                                <PremiumButton
-                                                    type="button"
-                                                    disabled={isActionLoading}
-                                                    onClick={() => handleApprove(request.id, 'PREMIUM')}
-                                                >
-                                                    <FiStar />
-                                                    В Premium
-                                                </PremiumButton>
+                                                    <PremiumButton
+                                                        type="button"
+                                                        disabled={isActionLoading}
+                                                        onClick={() => handleApprove(request, 'PREMIUM')}
+                                                    >
+                                                        <FiStar />
+                                                        В Premium
+                                                    </PremiumButton>
 
-                                                <RejectButton
-                                                    type="button"
-                                                    disabled={isActionLoading}
-                                                    onClick={() => handleReject(request.id)}
-                                                >
-                                                    <FiXCircle />
-                                                    Отклонить
-                                                </RejectButton>
-                                            </Actions>
-                                        ) : (
-                                            <Actions>
-                                                <DeleteButton
-                                                    type="button"
-                                                    disabled={isActionLoading}
-                                                    onClick={() => handleDelete(request.id)}
-                                                >
-                                                    <FiTrash2 />
-                                                    Удалить из списка
-                                                </DeleteButton>
-                                            </Actions>
-                                        )}
-                                    </CardBody>
-                                </RequestCard>
+                                                    <RejectButton
+                                                        type="button"
+                                                        disabled={isActionLoading}
+                                                        onClick={() => handleReject(request)}
+                                                    >
+                                                        <FiXCircle />
+                                                        Отклонить
+                                                    </RejectButton>
+                                                </>
+                                            )}
+
+                                            <DeleteButton
+                                                type="button"
+                                                disabled={isActionLoading}
+                                                onClick={() => handleDelete(request)}
+                                            >
+                                                <FiTrash2 />
+                                                Удалить
+                                            </DeleteButton>
+                                        </Actions>
+                                    </RequestBody>
+                                </RequestRow>
                             );
                         })}
-                    </RequestsGrid>
+                    </RequestsList>
 
                     <LoadMoreAnchor ref={loadMoreRef}>
                         {hasMore ? (
@@ -511,7 +530,7 @@ export function AdminRequestsPage() {
                 </>
             ) : (
                 <EmptyCard>
-                    <FiAlertCircle />
+                    <FiInbox />
 
                     <h2>Заявок пока нет</h2>
 
@@ -519,23 +538,37 @@ export function AdminRequestsPage() {
                         Когда пользователь отправит фото или видео через страницу заявки,
                         материал появится здесь.
                     </p>
+
+                    <PrimaryButton type="button" onClick={resetFilters}>
+                        Сбросить фильтры
+                    </PrimaryButton>
                 </EmptyCard>
             )}
         </Page>
     );
 }
 
-function mergeRequestsKeepingOrder(
-    first: MockContentRequest[],
-    second: MockContentRequest[]
+function mergeRequestsKeepingFirstPriority(
+    first: AdminContentRequest[],
+    second: AdminContentRequest[]
 ) {
-    const map = new Map<number, MockContentRequest>();
+    const result: AdminContentRequest[] = [];
+    const seen = new Set<number>();
 
     [...first, ...second].forEach((request) => {
-        map.set(request.id, request);
+        if (seen.has(request.id)) {
+            return;
+        }
+
+        seen.add(request.id);
+        result.push(request);
     });
 
-    return Array.from(map.values());
+    return result;
+}
+
+function getRequestPreviewUrl(request: AdminContentRequest) {
+    return getMediaUrl(request.previewUrl || request.fileUrl || null);
 }
 
 function getStatusText(status: RequestStatus) {
@@ -544,16 +577,22 @@ function getStatusText(status: RequestStatus) {
     }
 
     if (status === 'APPROVED') {
-        return 'Опубликовано';
+        return 'Одобрено';
     }
 
     return 'Отклонено';
 }
 
-function getRequestPreviewUrl(request: MockContentRequest) {
-    const requestWithFileUrl = request as RequestWithFileUrl;
+function getStatusIcon(status: RequestStatus) {
+    if (status === 'PENDING') {
+        return <FiClock />;
+    }
 
-    return getMediaUrl(request.previewUrl || requestWithFileUrl.fileUrl || null);
+    if (status === 'APPROVED') {
+        return <FiCheckCircle />;
+    }
+
+    return <FiXCircle />;
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -570,68 +609,8 @@ function getErrorMessage(error: unknown, fallback: string) {
 }
 
 const Page = styled.div`
-  display: grid;
-  gap: 18px;
-`;
-
-const Hero = styled.section`
-    padding: 22px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.lg};
-    background:
-            radial-gradient(circle at top left, rgba(124, 58, 237, 0.24), transparent 34%),
-            radial-gradient(circle at bottom right, rgba(239, 68, 68, 0.16), transparent 34%),
-            rgba(21, 25, 43, 0.86);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 18px;
-
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        align-items: flex-start;
-        flex-direction: column;
-        padding: 18px;
-    }
-`;
-
-const HeroContent = styled.div`
-    min-width: 0;
-`;
-
-const Eyebrow = styled.div`
-    margin-bottom: 8px;
-    color: ${({ theme }) => theme.colors.primaryHover};
-    font-size: 13px;
-    font-weight: 900;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-`;
-
-const Title = styled.h1`
-    margin: 0;
-    font-size: clamp(30px, 5vw, 52px);
-    line-height: 0.96;
-    letter-spacing: -0.075em;
-`;
-
-const Subtitle = styled.p`
-    max-width: 760px;
-    margin: 12px 0 0;
-    color: ${({ theme }) => theme.colors.textMuted};
-    line-height: 1.65;
-`;
-
-const HeroIcon = styled.div`
-    flex: 0 0 auto;
-    width: 76px;
-    height: 76px;
-    border-radius: 28px;
-    background: linear-gradient(135deg, #7c3aed, #ef4444);
-    color: white;
     display: grid;
-    place-items: center;
-    font-size: 36px;
-    box-shadow: 0 22px 50px rgba(124, 58, 237, 0.28);
+    gap: 18px;
 `;
 
 const StatsGrid = styled.div`
@@ -648,14 +627,14 @@ const StatsGrid = styled.div`
     }
 `;
 
-const StatCard = styled.div`
+const StatCard = styled.article`
     padding: 16px;
     border: 1px solid ${({ theme }) => theme.colors.border};
     border-radius: ${({ theme }) => theme.radius.lg};
-    background: rgba(21, 25, 43, 0.82);
+    background: rgba(21, 25, 43, 0.78);
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 13px;
 
     > svg {
         width: 46px;
@@ -667,6 +646,7 @@ const StatCard = styled.div`
     }
 
     div {
+        min-width: 0;
         display: grid;
         gap: 2px;
     }
@@ -774,7 +754,7 @@ const ToolbarActions = styled.div`
     }
 `;
 
-const ResetButton = styled.button`
+const RefreshButton = styled.button`
     min-height: 46px;
     padding: 0 16px;
     border: 1px solid ${({ theme }) => theme.colors.border};
@@ -789,25 +769,26 @@ const ResetButton = styled.button`
 
     &:hover {
         background: rgba(255, 255, 255, 0.09);
+        border-color: rgba(139, 92, 246, 0.45);
     }
 `;
 
-const RefreshButton = styled(ResetButton)``;
+const ResetButton = styled(RefreshButton)``;
 
 const FeedMeta = styled.div`
-  padding: 0 4px;
-  color: ${({ theme }) => theme.colors.textMuted};
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 13px;
-  font-weight: 800;
+    padding: 0 4px;
+    color: ${({ theme }) => theme.colors.textMuted};
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 13px;
+    font-weight: 800;
 
-  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-    align-items: flex-start;
-    flex-direction: column;
-  }
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        align-items: flex-start;
+        flex-direction: column;
+    }
 `;
 
 const LoadingInline = styled.div`
@@ -827,18 +808,18 @@ const LoadingInline = styled.div`
     }
 `;
 
-const RequestsGrid = styled.div`
+const RequestsList = styled.div`
     display: grid;
-    gap: 18px;
+    gap: 14px;
 `;
 
-const RequestCard = styled.article`
+const RequestRow = styled.article`
     overflow: hidden;
     border: 1px solid ${({ theme }) => theme.colors.border};
     border-radius: ${({ theme }) => theme.radius.lg};
-    background: rgba(21, 25, 43, 0.86);
+    background: rgba(21, 25, 43, 0.84);
     display: grid;
-    grid-template-columns: 320px minmax(0, 1fr);
+    grid-template-columns: 260px minmax(0, 1fr);
 
     @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
         grid-template-columns: 1fr;
@@ -847,77 +828,76 @@ const RequestCard = styled.article`
 
 const Preview = styled.div`
     position: relative;
-    min-height: 260px;
+    min-height: 230px;
     background: #05060d;
 
-    img,
-    video {
+    img {
         width: 100%;
         height: 100%;
-        min-height: 260px;
+        min-height: 230px;
         object-fit: cover;
+        display: block;
     }
 `;
 
 const MediaVideo = styled.video`
+    width: 100%;
+    height: 100%;
+    min-height: 230px;
+    object-fit: cover;
     display: block;
     background: #05060d;
 `;
 
-const Placeholder = styled.div`
-    min-height: 260px;
-    padding: 24px;
+const VideoPreview = styled.div`
+    min-height: 230px;
     background:
-            radial-gradient(circle at top left, rgba(124, 58, 237, 0.24), transparent 34%),
-            radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.16), transparent 34%),
+            radial-gradient(circle at top left, rgba(124, 58, 237, 0.28), transparent 34%),
+            radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.18), transparent 34%),
             #080a12;
-    color: ${({ theme }) => theme.colors.textMuted};
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    text-align: center;
+    color: ${({ theme }) => theme.colors.primaryHover};
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    gap: 10px;
+    font-weight: 900;
 
     svg {
-        color: ${({ theme }) => theme.colors.primaryHover};
-        font-size: 46px;
+        font-size: 44px;
     }
 
     span {
-        max-width: 220px;
-        line-height: 1.45;
-        font-weight: 800;
+        color: ${({ theme }) => theme.colors.textMuted};
     }
 `;
 
 const StatusBadge = styled.div<{ $status: RequestStatus }>`
     position: absolute;
-    left: 14px;
-    top: 14px;
+    left: 12px;
+    top: 12px;
     min-height: 34px;
     padding: 0 12px;
     border-radius: ${({ theme }) => theme.radius.full};
     background: ${({ $status }) => {
         if ($status === 'APPROVED') {
-            return 'rgba(34, 197, 94, 0.86)';
+            return 'rgba(34, 197, 94, 0.88)';
         }
 
         if ($status === 'REJECTED') {
-            return 'rgba(239, 68, 68, 0.86)';
+            return 'rgba(239, 68, 68, 0.88)';
         }
 
-        return 'rgba(245, 158, 11, 0.9)';
+        return 'rgba(245, 158, 11, 0.92)';
     }};
     color: white;
     display: inline-flex;
     align-items: center;
+    gap: 7px;
     font-size: 13px;
     font-weight: 900;
-    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
 `;
 
-const CardBody = styled.div`
+const RequestBody = styled.div`
     min-width: 0;
     padding: 18px;
     display: grid;
@@ -925,7 +905,7 @@ const CardBody = styled.div`
     gap: 14px;
 `;
 
-const CardHeader = styled.div`
+const RequestTop = styled.div`
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
@@ -936,24 +916,8 @@ const CardHeader = styled.div`
     }
 `;
 
-const AuthorBlock = styled.div`
+const RequestTitleBlock = styled.div`
     min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 11px;
-`;
-
-const AuthorAvatar = styled.div`
-    flex: 0 0 auto;
-    width: 46px;
-    height: 46px;
-    overflow: hidden;
-    border-radius: 17px;
-    background: linear-gradient(135deg, #7c3aed, #2563eb);
-    color: white;
-    display: grid;
-    place-items: center;
-    font-size: 21px;
 `;
 
 const RequestTitle = styled.h2`
@@ -962,7 +926,7 @@ const RequestTitle = styled.h2`
     letter-spacing: -0.055em;
 `;
 
-const Meta = styled.div`
+const RequestMeta = styled.div`
     margin-top: 5px;
     color: ${({ theme }) => theme.colors.textMuted};
     font-size: 13px;
@@ -973,9 +937,8 @@ const MediaBadge = styled.div`
     flex: 0 0 auto;
     min-height: 36px;
     padding: 0 12px;
-    border: 1px solid rgba(124, 58, 237, 0.32);
     border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(124, 58, 237, 0.1);
+    background: rgba(124, 58, 237, 0.14);
     color: #ddd6fe;
     display: inline-flex;
     align-items: center;
@@ -988,6 +951,7 @@ const Description = styled.p`
     margin: 0;
     color: ${({ theme }) => theme.colors.textMuted};
     line-height: 1.6;
+    white-space: pre-wrap;
 `;
 
 const DescriptionMuted = styled(Description)`
@@ -995,41 +959,27 @@ const DescriptionMuted = styled(Description)`
     font-style: italic;
 `;
 
-const InfoList = styled.div`
-    display: grid;
+const InfoGrid = styled.div`
+    display: flex;
+    flex-wrap: wrap;
     gap: 8px;
 `;
 
 const InfoItem = styled.div`
-    padding: 10px 12px;
+    min-height: 36px;
+    padding: 0 11px;
     border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: 14px;
-    background: rgba(255, 255, 255, 0.035);
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 14px;
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: rgba(255, 255, 255, 0.04);
+    color: ${({ theme }) => theme.colors.textMuted};
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 800;
 
-    strong {
-        color: ${({ theme }) => theme.colors.text};
-        font-size: 13px;
-    }
-
-    span {
-        min-width: 0;
-        color: ${({ theme }) => theme.colors.textMuted};
-        font-size: 13px;
-        text-align: right;
-        word-break: break-word;
-    }
-
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        flex-direction: column;
-        gap: 4px;
-
-        span {
-            text-align: left;
-        }
+    svg {
+        color: ${({ theme }) => theme.colors.primaryHover};
     }
 `;
 
@@ -1039,10 +989,12 @@ const Actions = styled.div`
     gap: 9px;
 `;
 
-const ActionButton = styled.button`
+const ApproveButton = styled.button`
     min-height: 42px;
-    padding: 0 13px;
+    padding: 0 14px;
+    border: none;
     border-radius: ${({ theme }) => theme.radius.full};
+    background: linear-gradient(135deg, #16a34a, #2563eb);
     color: white;
     display: inline-flex;
     align-items: center;
@@ -1059,26 +1011,52 @@ const ActionButton = styled.button`
     }
 `;
 
-const ApproveButton = styled(ActionButton)`
-    border: 1px solid rgba(37, 99, 235, 0.36);
-    background: linear-gradient(135deg, #2563eb, #7c3aed);
-`;
-
-const PremiumButton = styled(ActionButton)`
-    border: 1px solid rgba(236, 72, 153, 0.36);
+const PremiumButton = styled(ApproveButton)`
     background: linear-gradient(135deg, #7c3aed, #ec4899);
 `;
 
-const RejectButton = styled(ActionButton)`
-    border: 1px solid rgba(239, 68, 68, 0.34);
-    background: rgba(239, 68, 68, 0.18);
-    color: #fecaca;
+const RejectButton = styled.button`
+    min-height: 42px;
+    padding: 0 14px;
+    border: 1px solid rgba(245, 158, 11, 0.32);
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: rgba(245, 158, 11, 0.1);
+    color: #fde68a;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 900;
+
+    &:hover:not(:disabled) {
+        background: rgba(245, 158, 11, 0.16);
+    }
+
+    &:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
 `;
 
-const DeleteButton = styled(ActionButton)`
-    border: 1px solid rgba(239, 68, 68, 0.28);
-    background: rgba(239, 68, 68, 0.12);
+const DeleteButton = styled.button`
+    min-height: 42px;
+    padding: 0 14px;
+    border: 1px solid rgba(239, 68, 68, 0.32);
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: rgba(239, 68, 68, 0.1);
     color: #fecaca;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 900;
+
+    &:hover:not(:disabled) {
+        background: rgba(239, 68, 68, 0.16);
+    }
+
+    &:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
 `;
 
 const LoadMoreAnchor = styled.div`
@@ -1120,18 +1098,18 @@ const EndMessage = styled.div`
 const EmptyCard = styled.section`
     min-height: 420px;
     padding: 30px 22px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
+    border: 1px dashed rgba(139, 92, 246, 0.34);
     border-radius: ${({ theme }) => theme.radius.lg};
     background:
-            radial-gradient(circle at top left, rgba(124, 58, 237, 0.2), transparent 34%),
-            rgba(21, 25, 43, 0.86);
+            radial-gradient(circle at top left, rgba(124, 58, 237, 0.18), transparent 34%),
+            rgba(21, 25, 43, 0.74);
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     text-align: center;
 
-    svg {
+    > svg {
         margin-bottom: 16px;
         color: ${({ theme }) => theme.colors.primaryHover};
         font-size: 44px;
@@ -1144,7 +1122,7 @@ const EmptyCard = styled.section`
     }
 
     p {
-        max-width: 500px;
+        max-width: 520px;
         margin: 0;
         color: ${({ theme }) => theme.colors.textMuted};
         line-height: 1.6;

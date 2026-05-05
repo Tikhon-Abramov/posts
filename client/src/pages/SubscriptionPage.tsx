@@ -17,15 +17,13 @@ import {
 
 import type { AppDispatch, RootState } from '../app/store';
 import { setUser } from '../entities/auth/slice/authSlice';
-import type { AuthUser } from '../entities/auth/model/authTypes';
+import {
+  useActivateTestSubscriptionMutation,
+  useCancelSubscriptionMutation,
+  useGetMySubscriptionQuery,
+} from '../entities/subscription/api/subscriptionApi';
 
 type BillingPeriod = 'MONTHLY' | 'YEARLY';
-
-interface MockUser extends AuthUser {
-  password: string;
-}
-
-const MOCK_USERS_KEY = 'pulsefeed_mock_users';
 
 export function SubscriptionPage() {
   const dispatch = useDispatch<AppDispatch>();
@@ -33,9 +31,25 @@ export function SubscriptionPage() {
   const { user, accessToken } = useSelector((state: RootState) => state.auth);
 
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>('MONTHLY');
-  const [isProcessing, setIsProcessing] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const {
+    data: subscriptionData,
+    isLoading: isSubscriptionLoading,
+    refetch: refetchSubscription,
+  } = useGetMySubscriptionQuery(undefined, {
+    skip: !accessToken,
+    refetchOnMountOrArgChange: true,
+    refetchOnFocus: true,
+    refetchOnReconnect: true,
+  });
+
+  const [activateTestSubscription, { isLoading: isActivating }] =
+      useActivateTestSubscriptionMutation();
+
+  const [cancelSubscription, { isLoading: isCanceling }] =
+      useCancelSubscriptionMutation();
 
   const price = useMemo(() => {
     return billingPeriod === 'MONTHLY' ? '499 ₽' : '4 990 ₽';
@@ -43,46 +57,69 @@ export function SubscriptionPage() {
 
   const periodText = billingPeriod === 'MONTHLY' ? 'в месяц' : 'в год';
 
+  const hasPremium = Boolean(user?.hasPremium || subscriptionData?.hasPremium);
+  const isProcessing = isActivating || isCanceling;
+
   const handleBuySubscription = async () => {
     if (!user) {
       setErrorMessage('Пользователь не найден. Войдите в аккаунт заново.');
       return;
     }
 
-    setIsProcessing(true);
     setErrorMessage(null);
     setSuccessMessage(null);
 
     try {
-      await delay(700);
+      const result = await activateTestSubscription().unwrap();
 
-      const users = getMockUsers();
-
-      const updatedUsers = users.map((item) =>
-          item.id === user.id
-              ? {
-                ...item,
-                hasPremium: true,
-              }
-              : item
+      dispatch(
+          setUser({
+            ...user,
+            hasPremium: result.hasPremium,
+          })
       );
 
-      localStorage.setItem(MOCK_USERS_KEY, JSON.stringify(updatedUsers));
+      await refetchSubscription();
 
-      const updatedUser: AuthUser = {
-        ...user,
-        hasPremium: true,
-      };
-
-      dispatch(setUser(updatedUser));
-
-      setSuccessMessage(
-          'Подписка активирована. Теперь вам доступна Premium-лента.'
+      setSuccessMessage('Подписка активирована. Теперь вам доступна Premium-лента.');
+    } catch (error) {
+      setErrorMessage(
+          getErrorMessage(error, 'Не удалось активировать подписку. Попробуйте еще раз.')
       );
-    } catch {
-      setErrorMessage('Не удалось активировать подписку. Попробуйте еще раз.');
-    } finally {
-      setIsProcessing(false);
+    }
+  };
+
+  const handleCancelSubscription = async () => {
+    if (!user) {
+      return;
+    }
+
+    const isConfirmed = window.confirm('Отменить активную подписку?');
+
+    if (!isConfirmed) {
+      return;
+    }
+
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    try {
+      const result = await cancelSubscription().unwrap();
+
+      dispatch(
+          setUser({
+            ...user,
+            hasPremium: result.hasPremium,
+          })
+      );
+
+      await refetchSubscription();
+
+      setSuccessMessage('Подписка отменена.');
+    } catch (error) {
+      setErrorMessage(
+          getErrorMessage(error, 'Не удалось отменить подписку. Попробуйте еще раз.')
+      );
     }
   };
 
@@ -90,7 +127,9 @@ export function SubscriptionPage() {
     return (
         <StateCard>
           <FiRefreshCw />
+
           <h1>Проверяем аккаунт</h1>
+
           <p>Сейчас подтвердим сессию и загрузим информацию о подписке.</p>
         </StateCard>
     );
@@ -100,13 +139,15 @@ export function SubscriptionPage() {
     return (
         <StateCard>
           <FiLock />
+
           <h1>Нужна авторизация</h1>
+
           <p>Чтобы оформить подписку, нужно войти в аккаунт.</p>
         </StateCard>
     );
   }
 
-  if (user.hasPremium) {
+  if (hasPremium) {
     return (
         <Page>
           <ActiveHero>
@@ -119,7 +160,7 @@ export function SubscriptionPage() {
             <Title>Подписка активна</Title>
 
             <Subtitle>
-              У вас уже есть доступ к закрытой ленте. Можно смотреть Premium-посты,
+              У вас есть доступ к закрытой ленте. Можно смотреть Premium-посты,
               лайкать, сохранять и комментировать публикации.
             </Subtitle>
 
@@ -133,25 +174,53 @@ export function SubscriptionPage() {
                 <FiUser />
                 В профиль
               </SecondaryLink>
+
+              <DangerButton
+                  type="button"
+                  disabled={isProcessing}
+                  onClick={handleCancelSubscription}
+              >
+                {isCanceling ? 'Отменяем...' : 'Отменить подписку'}
+              </DangerButton>
             </ActiveActions>
+
+            {successMessage && (
+                <SuccessBox>
+                  <FiCheckCircle />
+                  {successMessage}
+                </SuccessBox>
+            )}
+
+            {errorMessage && (
+                <ErrorBox>
+                  <FiAlertCircle />
+                  {errorMessage}
+                </ErrorBox>
+            )}
           </ActiveHero>
 
           <BenefitsGrid>
             <BenefitCard>
-              <FiStar />
+              <FiLock />
+
               <h2>Закрытый контент</h2>
+
               <p>Доступ к публикациям, которые не видны обычным пользователям.</p>
             </BenefitCard>
 
             <BenefitCard>
               <FiZap />
+
               <h2>Больше возможностей</h2>
+
               <p>Premium-лента работает отдельно от обычной публичной ленты.</p>
             </BenefitCard>
 
             <BenefitCard>
               <FiShield />
+
               <h2>Приватный доступ</h2>
+
               <p>Контент доступен только аккаунтам с активной подпиской.</p>
             </BenefitCard>
           </BenefitsGrid>
@@ -161,35 +230,17 @@ export function SubscriptionPage() {
 
   return (
       <Page>
-        <Hero>
-          <HeroContent>
-            <Eyebrow>Premium</Eyebrow>
-
-            <Title>Открой закрытую ленту</Title>
-
-            <Subtitle>
-              Оформи подписку, чтобы получить доступ к Premium-постам. Сейчас это
-              временная фронтовая оплата: подписка активируется в mock-данных без
-              backend.
-            </Subtitle>
-          </HeroContent>
-
-          <HeroIcon>
-            <FiStar />
-          </HeroIcon>
-        </Hero>
-
         <Grid>
           <PlanCard>
             <PlanHeader>
               <div>
-                <Eyebrow>Тариф</Eyebrow>
-                <h2>Pulse Premium</h2>
+                <Eyebrow>Premium</Eyebrow>
+                <h2>Открой закрытую ленту</h2>
               </div>
 
               <PlanBadge>
-                <FiZap />
-                Best choice
+                <FiStar />
+                Pulse Premium
               </PlanBadge>
             </PlanHeader>
 
@@ -219,59 +270,54 @@ export function SubscriptionPage() {
             {billingPeriod === 'YEARLY' && (
                 <DiscountBox>
                   <FiCheckCircle />
-                  <span>Годовой вариант выгоднее примерно на 2 месяца.</span>
+                  Годовой вариант выгоднее примерно на 2 месяца.
                 </DiscountBox>
             )}
 
             <Features>
               <Feature>
                 <FiCheck />
-                <span>Доступ к Premium-ленте</span>
+                Доступ к Premium-ленте
               </Feature>
 
               <Feature>
                 <FiCheck />
-                <span>Закрытые фото и видео</span>
+                Закрытые фото и видео
               </Feature>
 
               <Feature>
                 <FiCheck />
-                <span>Возможность сохранять Premium-посты</span>
+                Возможность сохранять Premium-посты
               </Feature>
 
               <Feature>
                 <FiCheck />
-                <span>Будущие Premium-функции профиля</span>
+                Отдельный доступ к закрытым публикациям
               </Feature>
             </Features>
 
             {successMessage && (
                 <SuccessBox>
                   <FiCheckCircle />
-                  <span>{successMessage}</span>
+                  {successMessage}
                 </SuccessBox>
             )}
 
             {errorMessage && (
                 <ErrorBox>
                   <FiAlertCircle />
-                  <span>{errorMessage}</span>
+                  {errorMessage}
                 </ErrorBox>
             )}
 
             <BuyButton
                 type="button"
-                disabled={isProcessing}
+                disabled={isProcessing || isSubscriptionLoading}
                 onClick={handleBuySubscription}
             >
               <FiCreditCard />
-              {isProcessing ? 'Активируем...' : 'Оформить подписку'}
+              {isActivating ? 'Активируем...' : 'Оформить подписку'}
             </BuyButton>
-
-            <MockNote>
-              Это mock-оплата для проверки фронта. Позже заменим на backend
-              endpoint и платежную систему.
-            </MockNote>
           </PlanCard>
 
           <InfoColumn>
@@ -283,22 +329,8 @@ export function SubscriptionPage() {
               <h2>Что откроется</h2>
 
               <p>
-                После активации поле `hasPremium` у текущего пользователя станет
-                `true`, и страница `/premium` начнет показывать закрытые посты.
-              </p>
-            </InfoCard>
-
-            <InfoCard>
-              <InfoIcon>
-                <FiShield />
-              </InfoIcon>
-
-              <h2>Как заменить на backend</h2>
-
-              <p>
-                Позже вместо обновления `localStorage` добавим RTK Query mutation
-                вроде `createSubscription`, а после успешной оплаты обновим
-                пользователя через `/auth/me`.
+                После активации backend обновит статус подписки в базе данных, а
+                Premium-лента станет доступна без перезагрузки аккаунта.
               </p>
             </InfoCard>
 
@@ -320,54 +352,22 @@ export function SubscriptionPage() {
   );
 }
 
-function delay(ms: number) {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
-}
-
-function getMockUsers(): MockUser[] {
-  const savedUsers = localStorage.getItem(MOCK_USERS_KEY);
-
-  if (!savedUsers) {
-    return [];
+function getErrorMessage(error: unknown, fallback: string) {
+  if (
+      typeof error === 'object' &&
+      error !== null &&
+      'data' in error &&
+      typeof (error as { data?: { message?: unknown } }).data?.message === 'string'
+  ) {
+    return (error as { data: { message: string } }).data.message;
   }
 
-  try {
-    return JSON.parse(savedUsers) as MockUser[];
-  } catch {
-    localStorage.removeItem(MOCK_USERS_KEY);
-    return [];
-  }
+  return fallback;
 }
 
 const Page = styled.div`
   display: grid;
   gap: 18px;
-`;
-
-const Hero = styled.section`
-  padding: 22px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: ${({ theme }) => theme.radius.lg};
-  background:
-    radial-gradient(circle at top left, rgba(124, 58, 237, 0.24), transparent 34%),
-    radial-gradient(circle at bottom right, rgba(236, 72, 153, 0.18), transparent 34%),
-    rgba(21, 25, 43, 0.86);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-
-  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-    align-items: flex-start;
-    flex-direction: column;
-    padding: 18px;
-  }
-`;
-
-const HeroContent = styled.div`
-  min-width: 0;
 `;
 
 const Eyebrow = styled.div`
@@ -393,19 +393,6 @@ const Subtitle = styled.p`
   line-height: 1.65;
 `;
 
-const HeroIcon = styled.div`
-  flex: 0 0 auto;
-  width: 78px;
-  height: 78px;
-  border-radius: 30px;
-  background: linear-gradient(135deg, #7c3aed, #ec4899);
-  color: white;
-  display: grid;
-  place-items: center;
-  font-size: 38px;
-  box-shadow: 0 24px 60px rgba(236, 72, 153, 0.26);
-`;
-
 const Grid = styled.div`
   display: grid;
   grid-template-columns: minmax(0, 1fr) 340px;
@@ -421,9 +408,9 @@ const PlanCard = styled.section`
   border: 1px solid rgba(236, 72, 153, 0.26);
   border-radius: ${({ theme }) => theme.radius.lg};
   background:
-    radial-gradient(circle at top left, rgba(236, 72, 153, 0.18), transparent 34%),
-    radial-gradient(circle at bottom right, rgba(124, 58, 237, 0.22), transparent 34%),
-    rgba(21, 25, 43, 0.88);
+      radial-gradient(circle at top left, rgba(236, 72, 153, 0.18), transparent 34%),
+      radial-gradient(circle at bottom right, rgba(124, 58, 237, 0.22), transparent 34%),
+      rgba(21, 25, 43, 0.88);
   display: grid;
   gap: 18px;
 `;
@@ -587,14 +574,6 @@ const BuyButton = styled.button`
   }
 `;
 
-const MockNote = styled.p`
-  margin: 0;
-  color: ${({ theme }) => theme.colors.textMuted};
-  font-size: 13px;
-  line-height: 1.5;
-  text-align: center;
-`;
-
 const InfoColumn = styled.aside`
   display: grid;
   align-content: start;
@@ -687,7 +666,7 @@ const ErrorBox = styled.div`
 `;
 
 const ActiveHero = styled.section`
-  min-height: 540px;
+  min-height: 420px;
   padding: 34px 24px;
   border: 1px solid rgba(34, 197, 94, 0.28);
   border-radius: ${({ theme }) => theme.radius.lg};
@@ -706,7 +685,7 @@ const ActiveHero = styled.section`
   }
 
   @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-    min-height: 480px;
+    min-height: 380px;
     padding: 28px 18px;
   }
 `;
@@ -767,6 +746,25 @@ const SecondaryLink = styled(Link)`
   }
 `;
 
+const DangerButton = styled.button`
+  min-height: 50px;
+  padding: 0 18px;
+  border: 1px solid rgba(239, 68, 68, 0.32);
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: rgba(239, 68, 68, 0.1);
+  color: #fecaca;
+  font-weight: 900;
+
+  &:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.16);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+`;
+
 const BenefitsGrid = styled.div`
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -808,8 +806,8 @@ const StateCard = styled.section`
   border: 1px solid ${({ theme }) => theme.colors.border};
   border-radius: ${({ theme }) => theme.radius.lg};
   background:
-    radial-gradient(circle at top left, rgba(124, 58, 237, 0.2), transparent 34%),
-    rgba(21, 25, 43, 0.86);
+      radial-gradient(circle at top left, rgba(124, 58, 237, 0.2), transparent 34%),
+      rgba(21, 25, 43, 0.86);
   display: flex;
   flex-direction: column;
   align-items: center;

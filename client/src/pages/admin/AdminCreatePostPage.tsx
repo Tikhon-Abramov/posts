@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import type {ChangeEvent, FormEvent} from 'react';
+import type { ChangeEvent, FormEvent } from 'react';
 import { useSelector } from 'react-redux';
 import styled from 'styled-components';
 import {
@@ -8,7 +8,6 @@ import {
   FiFile,
   FiGlobe,
   FiImage,
-  FiPlusCircle,
   FiRefreshCw,
   FiSend,
   FiStar,
@@ -34,7 +33,6 @@ interface SelectedFileState {
 
 export function AdminCreatePostPage() {
   const user = useSelector((state: RootState) => state.auth.user);
-
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [createAdminPost, { isLoading: isSubmitting }] =
@@ -105,8 +103,7 @@ export function AdminCreatePostPage() {
         setSelectedFile({
           file,
           mediaType,
-          previewUrl:
-              typeof reader.result === 'string' ? reader.result : null,
+          previewUrl: typeof reader.result === 'string' ? reader.result : null,
         });
       };
 
@@ -192,42 +189,23 @@ export function AdminCreatePostPage() {
       );
 
       resetForm();
-    } catch {
+    } catch (error) {
       setStatus('error');
-      setMessage('Не удалось создать пост. Попробуйте еще раз.');
+      setMessage(getErrorMessage(error, 'Не удалось создать пост. Попробуйте еще раз.'));
     }
   };
 
   return (
       <Page>
-        <Hero>
-          <HeroContent>
-            <Eyebrow>Admin</Eyebrow>
-
-            <Title>Создать пост</Title>
-
-            <Subtitle>
-              Администратор может напрямую опубликовать фото или видео в обычную
-              ленту либо в Premium. Создание теперь идет через admin API-слой,
-              который позже подключим к backend.
-            </Subtitle>
-          </HeroContent>
-
-          <HeroIcon>
-            <FiPlusCircle />
-          </HeroIcon>
-        </Hero>
-
         <ContentGrid>
           <FormCard onSubmit={handleSubmit}>
             <FieldGroup>
-              <Label htmlFor="post-title">Название</Label>
+              <Label>Название</Label>
 
               <Input
-                  id="post-title"
                   value={title}
                   maxLength={90}
-                  placeholder="Например: Закрытый неоновый сет"
+                  placeholder="Например: Новый пост"
                   onChange={(event) => setTitle(event.target.value)}
               />
 
@@ -235,13 +213,12 @@ export function AdminCreatePostPage() {
             </FieldGroup>
 
             <FieldGroup>
-              <Label htmlFor="post-description">Описание</Label>
+              <Label>Описание</Label>
 
               <Textarea
-                  id="post-description"
                   value={description}
                   maxLength={1200}
-                  placeholder="Описание можно оставить пустым..."
+                  placeholder="Добавьте описание публикации..."
                   onChange={(event) => setDescription(event.target.value)}
               />
 
@@ -296,10 +273,7 @@ export function AdminCreatePostPage() {
 
                     <strong>Выберите фото или видео</strong>
 
-                    <span>
-                      Фото до 8 MB или видео до 40 MB. Файл отправится на backend через
-                      FormData в поле media.
-                    </span>
+                    <span>Фото до 8 MB или видео до 40 MB.</span>
                   </UploadZone>
               ) : (
                   <SelectedFile>
@@ -358,23 +332,23 @@ export function AdminCreatePostPage() {
             <InfoCard>
               <FiFile />
 
-              <h2>Что сохраняется</h2>
+              <h2>Публикация</h2>
 
               <Text>
-                Пост создается через `useCreateAdminPostMutation`. Сейчас mutation
-                работает с mock-хранилищем, а после подключения backend будет
-                отправлять данные на `/admin/posts`.
+                Администратор может создать пост напрямую в обычной или Premium-ленте.
+                После успешной публикации материал появится в соответствующем разделе.
               </Text>
             </InfoCard>
 
             <InfoCard>
               <FiRefreshCw />
 
-              <h2>После публикации</h2>
+              <h2>После создания</h2>
 
               <Text>
-                Пост сразу появится в обычной или Premium-ленте. Ленты обновляются
-                автоматически и подгружают публикации частями.
+                Пост будет доступен в админском списке постов. Обычные публикации
+                увидят все пользователи, Premium-публикации — только подписчики и
+                администраторы.
               </Text>
             </InfoCard>
           </SidePanel>
@@ -395,69 +369,22 @@ function formatFileSize(size: number) {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function getErrorMessage(error: unknown, fallback: string) {
+  if (
+      typeof error === 'object' &&
+      error !== null &&
+      'data' in error &&
+      typeof (error as { data?: { message?: unknown } }).data?.message === 'string'
+  ) {
+    return (error as { data: { message: string } }).data.message;
+  }
+
+  return fallback;
+}
+
 const Page = styled.div`
   display: grid;
   gap: 18px;
-`;
-
-const Hero = styled.section`
-  padding: 22px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: ${({ theme }) => theme.radius.lg};
-  background:
-      radial-gradient(circle at top left, rgba(124, 58, 237, 0.24), transparent 34%),
-      radial-gradient(circle at bottom right, rgba(239, 68, 68, 0.14), transparent 34%),
-      rgba(21, 25, 43, 0.86);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-
-  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-    align-items: flex-start;
-    flex-direction: column;
-    padding: 18px;
-  }
-`;
-
-const HeroContent = styled.div`
-  min-width: 0;
-`;
-
-const Eyebrow = styled.div`
-  margin-bottom: 8px;
-  color: ${({ theme }) => theme.colors.primaryHover};
-  font-size: 13px;
-  font-weight: 900;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-`;
-
-const Title = styled.h1`
-  margin: 0;
-  font-size: clamp(30px, 5vw, 52px);
-  line-height: 0.96;
-  letter-spacing: -0.075em;
-`;
-
-const Subtitle = styled.p`
-  max-width: 720px;
-  margin: 12px 0 0;
-  color: ${({ theme }) => theme.colors.textMuted};
-  line-height: 1.65;
-`;
-
-const HeroIcon = styled.div`
-  flex: 0 0 auto;
-  width: 76px;
-  height: 76px;
-  border-radius: 28px;
-  background: linear-gradient(135deg, #7c3aed, #2563eb);
-  color: white;
-  display: grid;
-  place-items: center;
-  font-size: 36px;
-  box-shadow: 0 22px 50px rgba(124, 58, 237, 0.28);
 `;
 
 const ContentGrid = styled.div`
@@ -552,13 +479,13 @@ const VisibilityGrid = styled.div`
 const VisibilityButton = styled.button<{ $active?: boolean }>`
   padding: 14px;
   border: 1px solid
-  ${({ theme, $active }) =>
-      $active ? 'rgba(139, 92, 246, 0.72)' : theme.colors.border};
+    ${({ theme, $active }) =>
+    $active ? 'rgba(139, 92, 246, 0.72)' : theme.colors.border};
   border-radius: 18px;
   background: ${({ $active }) =>
-      $active
-          ? 'linear-gradient(135deg, rgba(124,58,237,0.24), rgba(37,99,235,0.14))'
-          : 'rgba(255,255,255,0.045)'};
+    $active
+        ? 'linear-gradient(135deg, rgba(124,58,237,0.24), rgba(37,99,235,0.14))'
+        : 'rgba(255,255,255,0.045)'};
   color: ${({ theme }) => theme.colors.text};
   display: flex;
   align-items: flex-start;

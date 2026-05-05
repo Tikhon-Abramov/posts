@@ -5,7 +5,6 @@ import styled from 'styled-components';
 import {
     FiAlertCircle,
     FiFilter,
-    FiGlobe,
     FiLoader,
     FiSearch,
 } from 'react-icons/fi';
@@ -227,24 +226,6 @@ export function HomePage() {
 
     return (
         <Page>
-            <Hero>
-                <HeroContent>
-                    <Eyebrow>Обычная лента</Eyebrow>
-
-                    <Title>Свежие фото и видео</Title>
-
-                    <Subtitle>
-                        Публичные посты доступны всем пользователям. Лента подгружается
-                        частями при прокрутке и автоматически проверяет новые публикации.
-                    </Subtitle>
-                </HeroContent>
-
-                <HeroBadge>
-                    <FiGlobe />
-                    Public
-                </HeroBadge>
-            </Hero>
-
             <Toolbar>
                 <SearchBox>
                     <FiSearch />
@@ -348,66 +329,6 @@ function mergePostsKeepingFirstPriority(first: Post[], second: Post[]) {
 const Page = styled.div`
     display: grid;
     gap: 18px;
-`;
-
-const Hero = styled.section`
-    padding: 22px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.lg};
-    background:
-            radial-gradient(circle at top left, rgba(124, 58, 237, 0.22), transparent 34%),
-            radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.16), transparent 34%),
-            rgba(21, 25, 43, 0.86);
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 18px;
-
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        flex-direction: column;
-        padding: 18px;
-    }
-`;
-
-const HeroContent = styled.div`
-    min-width: 0;
-`;
-
-const Eyebrow = styled.div`
-    margin-bottom: 8px;
-    color: ${({ theme }) => theme.colors.primaryHover};
-    font-size: 13px;
-    font-weight: 900;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-`;
-
-const Title = styled.h1`
-    margin: 0;
-    font-size: clamp(30px, 5vw, 52px);
-    line-height: 0.96;
-    letter-spacing: -0.075em;
-`;
-
-const Subtitle = styled.p`
-    max-width: 720px;
-    margin: 12px 0 0;
-    color: ${({ theme }) => theme.colors.textMuted};
-    line-height: 1.65;
-`;
-
-const HeroBadge = styled.div`
-    flex: 0 0 auto;
-    min-height: 42px;
-    padding: 0 14px;
-    border: 1px solid rgba(37, 99, 235, 0.36);
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(37, 99, 235, 0.12);
-    color: #bfdbfe;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    font-weight: 900;
 `;
 
 const Toolbar = styled.div`

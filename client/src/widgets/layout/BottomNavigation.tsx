@@ -9,8 +9,6 @@ import {
     FiFilePlus,
     FiGrid,
     FiHome,
-    FiInbox,
-    FiPlusCircle,
     FiShield,
     FiStar,
     FiUser,
@@ -18,9 +16,11 @@ import {
 
 import type { RootState } from '../../app/store';
 import { useGetNotificationsStatsQuery } from '../../entities/notification/api/notificationApi';
+import { useGetAdminContentRequestsStatsQuery } from '../../entities/admin/api/adminContentRequestApi';
 import { getMediaUrl } from '../../shared/lib/getMediaUrl';
 
 const NOTIFICATIONS_STATS_POLLING_INTERVAL = 5000;
+const ADMIN_REQUESTS_STATS_POLLING_INTERVAL = 5000;
 
 interface NavigationItem {
     to: string;
@@ -46,7 +46,19 @@ export function BottomNavigation() {
         refetchOnReconnect: true,
     });
 
+    const { data: adminRequestsStats } = useGetAdminContentRequestsStatsQuery(
+        undefined,
+        {
+            skip: !isAdmin,
+            pollingInterval: ADMIN_REQUESTS_STATS_POLLING_INTERVAL,
+            refetchOnMountOrArgChange: true,
+            refetchOnFocus: true,
+            refetchOnReconnect: true,
+        }
+    );
+
     const unreadNotificationsCount = notificationsStats?.unread || 0;
+    const pendingAdminRequestsCount = adminRequestsStats?.pending || 0;
 
     const navigationItems: NavigationItem[] = [
         {
@@ -98,21 +110,10 @@ export function BottomNavigation() {
             ),
         },
         {
-            to: '/admin/requests',
-            label: 'Заявки',
-            icon: <FiInbox />,
-            isAdminOnly: true,
-        },
-        {
-            to: '/admin/posts',
-            label: 'Посты',
+            to: '/admin',
+            label: 'Админка',
             icon: <FiShield />,
-            isAdminOnly: true,
-        },
-        {
-            to: '/admin/posts/create',
-            label: 'Создать',
-            icon: <FiPlusCircle />,
+            badge: pendingAdminRequestsCount,
             isAdminOnly: true,
         },
     ];

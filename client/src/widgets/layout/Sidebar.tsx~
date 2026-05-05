@@ -9,9 +9,7 @@ import {
     FiFilePlus,
     FiGrid,
     FiHome,
-    FiInbox,
     FiLogOut,
-    FiPlusCircle,
     FiShield,
     FiStar,
     FiUser,
@@ -21,6 +19,8 @@ import type { AppDispatch, RootState } from '../../app/store';
 import { logout, openAuthModal } from '../../entities/auth/slice/authSlice';
 import { useGetNotificationsStatsQuery } from '../../entities/notification/api/notificationApi';
 import { getMediaUrl } from '../../shared/lib/getMediaUrl';
+
+const NOTIFICATIONS_STATS_POLLING_INTERVAL = 5000;
 
 interface NavigationItem {
     to: string;
@@ -42,6 +42,10 @@ export function Sidebar() {
 
     const { data: notificationsStats } = useGetNotificationsStatsQuery(undefined, {
         skip: !isAuth,
+        pollingInterval: NOTIFICATIONS_STATS_POLLING_INTERVAL,
+        refetchOnMountOrArgChange: true,
+        refetchOnFocus: true,
+        refetchOnReconnect: true,
     });
 
     const unreadNotificationsCount = notificationsStats?.unread || 0;
@@ -90,21 +94,9 @@ export function Sidebar() {
             icon: <FiUser />,
         },
         {
-            to: '/admin/requests',
-            label: 'Заявки',
-            icon: <FiInbox />,
-            isAdminOnly: true,
-        },
-        {
-            to: '/admin/posts',
-            label: 'Посты',
+            to: '/admin',
+            label: 'Админка',
             icon: <FiShield />,
-            isAdminOnly: true,
-        },
-        {
-            to: '/admin/posts/create',
-            label: 'Создать пост',
-            icon: <FiPlusCircle />,
             isAdminOnly: true,
         },
     ];

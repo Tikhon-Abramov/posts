@@ -1,57 +1,67 @@
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type {ChangeEvent, FormEvent} from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import styled from 'styled-components';
 import {
-  FiBookmark,
+  FiAlertCircle,
+  FiCamera,
   FiCheckCircle,
-  FiEdit3,
-  FiImage,
-  FiKey,
+  FiLock,
   FiLogOut,
   FiMail,
   FiRefreshCw,
   FiSave,
   FiShield,
   FiStar,
-  FiTrash2,
-  FiUpload,
   FiUploadCloud,
   FiUser,
 } from 'react-icons/fi';
 
 import type { AppDispatch, RootState } from '../app/store';
-import { logout, setUser } from '../entities/auth/slice/authSlice';
+import { logout } from '../entities/auth/slice/authSlice';
+import { useChangePasswordMutation, useGetMeQuery } from '../entities/auth/api/authApi';
 import {
-  useChangePasswordMutation,
-  useLogoutUserMutation,
-  useUpdateProfileMutation,
-} from '../entities/auth/api/authApi';
+  useUpdateMeMutation,
+  useUploadAvatarMutation,
+} from '../entities/user/api/userApi';
+import { getMediaUrl } from '../shared/lib/getMediaUrl';
 
-const MAX_AVATAR_SIZE = 900 * 1024;
+type MessageStatus = 'idle' | 'success' | 'error';
 
 export function ProfilePage() {
   const dispatch = useDispatch<AppDispatch>();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const { user, accessToken } = useSelector((state: RootState) => state.auth);
+  const { accessToken, user } = useSelector((state: RootState) => state.auth);
 
-  const [logoutUser, { isLoading: isLogoutLoading }] = useLogoutUserMutation();
-  const [updateProfile, updateProfileState] = useUpdateProfileMutation();
-  const [changePassword, changePasswordState] = useChangePasswordMutation();
+  const [updateMe, { isLoading: isUpdatingProfile }] = useUpdateMeMutation();
+  const [uploadAvatar, { isLoading: isUploadingAvatar }] = useUploadAvatarMutation();
+  const [changePassword, { isLoading: isChangingPassword }] =
+      useChangePasswordMutation();
+
+  const { refetch: refetchMe, isFetching: isRefetchingMe } = useGetMeQuery(
+      undefined,
+      {
+        skip: !accessToken,
+      }
+  );
 
   const [nickname, setNickname] = useState('');
   const [email, setEmail] = useState('');
-  const [avatarDataUrl, setAvatarDataUrl] = useState('');
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
 
-  const [profileSuccess, setProfileSuccess] = useState<string | null>(null);
-  const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null);
-  const [profileLocalError, setProfileLocalError] = useState<string | null>(null);
-  const [passwordLocalError, setPasswordLocalError] = useState<string | null>(
-      null
-  );
+  const [profileStatus, setProfileStatus] = useState<MessageStatus>('idle');
+  const [profileMessage, setProfileMessage] = useState('');
+
+  const [passwordStatus, setPasswordStatus] = useState<MessageStatus>('idle');
+  const [passwordMessage, setPasswordMessage] = useState('');
+
+  const [avatarStatus, setAvatarStatus] = useState<MessageStatus>('idle');
+  const [avatarMessage, setAvatarMessage] = useState('');
+
+  const avatarUrl = useMemo(() => getMediaUrl(user?.avatarUrl), [user?.avatarUrl]);
 
   useEffect(() => {
     if (!user) {
@@ -60,464 +70,327 @@ export function ProfilePage() {
 
     setNickname(user.nickname);
     setEmail(user.email);
-    setAvatarDataUrl(user.avatarUrl || '');
   }, [user]);
 
-  const profileServerError = useMemo(() => {
-    return getApiErrorMessage(updateProfileState.error);
-  }, [updateProfileState.error]);
+  const canSaveProfile = useMemo(() => {
+    return (
+        Boolean(user) &&
+        nickname.trim().length >= 3 &&
+        email.trim().includes('@') &&
+        !isUpdatingProfile
+    );
+  }, [email, isUpdatingProfile, nickname, user]);
 
-  const passwordServerError = useMemo(() => {
-    return getApiErrorMessage(changePasswordState.error);
-  }, [changePasswordState.error]);
+  const canChangePassword = useMemo(() => {
+    return (
+        currentPassword.length > 0 &&
+        newPassword.length >= 6 &&
+        !isChangingPassword
+    );
+  }, [currentPassword, isChangingPassword, newPassword]);
 
-  const profileError = profileLocalError || profileServerError;
-  const passwordError = passwordLocalError || passwordServerError;
-
-  const handleLogout = async () => {
-    try {
-      await logoutUser().unwrap();
-    } catch {
-      /*
-        Даже если сервер не ответил, локально все равно выходим,
-        чтобы пользователь не оставался с битой сессией.
-      */
-    } finally {
-      dispatch(logout());
-    }
-  };
-
-  const handleAvatarChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-
-    setProfileSuccess(null);
-    setProfileLocalError(null);
-
-    if (!file) {
-      return;
-    }
-
-    if (!file.type.startsWith('image/')) {
-      setProfileLocalError('Выберите файл изображения.');
-      event.target.value = '';
-      return;
-    }
-
-    if (file.size > MAX_AVATAR_SIZE) {
-      setProfileLocalError(
-          'Для mock-режима выберите изображение до 900 KB. Позже backend позволит загружать файлы больше.'
-      );
-      event.target.value = '';
-      return;
-    }
-
-    const reader = new FileReader();
-
-    reader.onload = () => {
-      setAvatarDataUrl(String(reader.result));
-    };
-
-    reader.onerror = () => {
-      setProfileLocalError('Не удалось прочитать файл изображения.');
-    };
-
-    reader.readAsDataURL(file);
-  };
-
-  const handleRemoveAvatar = () => {
-    setAvatarDataUrl('');
-    setProfileSuccess(null);
-    setProfileLocalError(null);
-  };
-
-  const handleUpdateProfile = async (event: FormEvent<HTMLFormElement>) => {
+  const handleProfileSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    setProfileLocalError(null);
-    setProfileSuccess(null);
-
-    const normalizedNickname = nickname.trim();
-    const normalizedEmail = email.trim().toLowerCase();
-
-    if (normalizedNickname.length < 3) {
-      setProfileLocalError('Ник должен содержать минимум 3 символа.');
-      return;
-    }
-
-    if (!normalizedEmail.includes('@')) {
-      setProfileLocalError('Введите корректную почту.');
-      return;
-    }
+    setProfileStatus('idle');
+    setProfileMessage('');
 
     try {
-      const updatedUser = await updateProfile({
-        nickname: normalizedNickname,
-        email: normalizedEmail,
-        avatarUrl: avatarDataUrl || null,
+      await updateMe({
+        nickname: nickname.trim(),
+        email: email.trim(),
       }).unwrap();
 
-      dispatch(setUser(updatedUser));
-      setProfileSuccess('Профиль успешно обновлен.');
-    } catch {
-      /*
-        Ошибка уже отображается через profileError.
-      */
+      setProfileStatus('success');
+      setProfileMessage('Профиль обновлен.');
+    } catch (error) {
+      setProfileStatus('error');
+      setProfileMessage(getErrorMessage(error, 'Не удалось обновить профиль.'));
     }
   };
 
-  const handleChangePassword = async (event: FormEvent<HTMLFormElement>) => {
+  const handlePasswordSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    setPasswordLocalError(null);
-    setPasswordSuccess(null);
-
-    if (!currentPassword.trim()) {
-      setPasswordLocalError('Введите текущий пароль.');
-      return;
-    }
-
-    if (newPassword.trim().length < 6) {
-      setPasswordLocalError('Новый пароль должен содержать минимум 6 символов.');
-      return;
-    }
-
-    if (currentPassword.trim() === newPassword.trim()) {
-      setPasswordLocalError('Новый пароль должен отличаться от текущего.');
-      return;
-    }
+    setPasswordStatus('idle');
+    setPasswordMessage('');
 
     try {
-      const response = await changePassword({
+      await changePassword({
         currentPassword,
         newPassword,
       }).unwrap();
 
       setCurrentPassword('');
       setNewPassword('');
-      setPasswordSuccess(response.message || 'Пароль успешно изменен.');
-    } catch {
-      /*
-        Ошибка уже отображается через passwordError.
-      */
+
+      setPasswordStatus('success');
+      setPasswordMessage('Пароль изменен.');
+    } catch (error) {
+      setPasswordStatus('error');
+      setPasswordMessage(getErrorMessage(error, 'Не удалось изменить пароль.'));
     }
   };
 
-  if (accessToken && !user) {
-    return (
-        <StateCard>
-          <FiRefreshCw />
-          <h1>Проверяем профиль</h1>
-          <p>Сейчас подтвердим аккаунт и загрузим данные пользователя.</p>
-        </StateCard>
-    );
-  }
+  const handleAvatarClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleAvatarChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+
+    setAvatarStatus('idle');
+    setAvatarMessage('');
+
+    if (!file) {
+      return;
+    }
+
+    if (!file.type.startsWith('image/')) {
+      setAvatarStatus('error');
+      setAvatarMessage('Аватар должен быть изображением.');
+      return;
+    }
+
+    try {
+      await uploadAvatar(file).unwrap();
+
+      setAvatarStatus('success');
+      setAvatarMessage('Аватар обновлен.');
+    } catch (error) {
+      setAvatarStatus('error');
+      setAvatarMessage(getErrorMessage(error, 'Не удалось загрузить аватар.'));
+    } finally {
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
+  const handleLogout = () => {
+    dispatch(logout());
+  };
 
   if (!user) {
     return (
         <StateCard>
-          <FiUser />
-          <h1>Профиль недоступен</h1>
-          <p>Чтобы открыть профиль, нужно войти в аккаунт.</p>
+          <FiLock />
+
+          <h1>Нужна авторизация</h1>
+
+          <p>Войдите в аккаунт, чтобы открыть профиль.</p>
         </StateCard>
     );
   }
 
   return (
       <Page>
-        <ProfileHero>
-          <AvatarBlock>
-            {avatarDataUrl ? (
-                <AvatarImage src={avatarDataUrl} alt={nickname || user.nickname} />
-            ) : (
-                <AvatarFallback>{user.nickname.slice(0, 1).toUpperCase()}</AvatarFallback>
-            )}
-          </AvatarBlock>
+        <Hero>
+          <ProfileHead>
+            <AvatarButton type="button" onClick={handleAvatarClick}>
+              {avatarUrl ? <img src={avatarUrl} alt={user.nickname} /> : <FiUser />}
 
-          <ProfileInfo>
-            <RoleBadge $isAdmin={user.role === 'ADMIN'}>
-              {user.role === 'ADMIN' ? (
-                  <>
-                    <FiShield />
-                    Администратор
-                  </>
-              ) : (
-                  <>
-                    <FiUser />
-                    Пользователь
-                  </>
-              )}
-            </RoleBadge>
+              <AvatarOverlay>
+                <FiCamera />
+              </AvatarOverlay>
+            </AvatarButton>
 
-            <h1>{user.nickname}</h1>
+            <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                hidden
+                onChange={handleAvatarChange}
+            />
 
-            <p>
-              Управление аккаунтом, подпиской, сохраненными постами и заявками на
-              публикацию контента.
-            </p>
-          </ProfileInfo>
+            <HeroText>
+              <Eyebrow>Профиль</Eyebrow>
 
-          <LogoutButton
-              type="button"
-              disabled={isLogoutLoading}
-              onClick={handleLogout}
-          >
-            <FiLogOut />
-            {isLogoutLoading ? 'Выходим...' : 'Выйти'}
-          </LogoutButton>
-        </ProfileHero>
+              <Title>@{user.nickname}</Title>
+
+              <Subtitle>
+                Управление аккаунтом, аватаром и паролем. Роль и Premium-доступ
+                берутся только с backend и не редактируются пользователем.
+              </Subtitle>
+
+              <Badges>
+                <Badge>
+                  <FiShield />
+                  {user.role === 'ADMIN' ? 'Администратор' : 'Пользователь'}
+                </Badge>
+
+                <Badge>
+                  <FiStar />
+                  {user.hasPremium ? 'Premium активен' : 'Без подписки'}
+                </Badge>
+              </Badges>
+            </HeroText>
+          </ProfileHead>
+
+          <HeroActions>
+            <RefreshButton type="button" disabled={isRefetchingMe} onClick={() => refetchMe()}>
+              <FiRefreshCw />
+              {isRefetchingMe ? 'Обновляем...' : 'Обновить'}
+            </RefreshButton>
+
+            <LogoutButton type="button" onClick={handleLogout}>
+              <FiLogOut />
+              Выйти
+            </LogoutButton>
+          </HeroActions>
+        </Hero>
+
+        {avatarMessage && (
+            <StatusMessage $status={avatarStatus}>
+              {avatarStatus === 'success' ? <FiCheckCircle /> : <FiAlertCircle />}
+              {avatarMessage}
+            </StatusMessage>
+        )}
 
         <Grid>
-          <MainColumn>
-            <Section as="form" onSubmit={handleUpdateProfile}>
-              <SectionHeader>
-                <div>
-                  <Eyebrow>Аккаунт</Eyebrow>
-                  <h2>Основная информация</h2>
-                </div>
+          <Card>
+            <CardHeader>
+              <FiUser />
 
-                <IconBox>
-                  <FiEdit3 />
-                </IconBox>
-              </SectionHeader>
+              <div>
+                <h2>Данные профиля</h2>
+                <p>Никнейм и email используются для отображения аккаунта.</p>
+              </div>
+            </CardHeader>
 
-              {profileSuccess && (
-                  <SuccessBox>
-                    <FiCheckCircle />
-                    <span>{profileSuccess}</span>
-                  </SuccessBox>
+            <Form onSubmit={handleProfileSubmit}>
+              <Field>
+                <Label htmlFor="nickname">Никнейм</Label>
+
+                <InputWrap>
+                  <FiUser />
+
+                  <input
+                      id="nickname"
+                      value={nickname}
+                      maxLength={50}
+                      onChange={(event) => setNickname(event.target.value)}
+                  />
+                </InputWrap>
+              </Field>
+
+              <Field>
+                <Label htmlFor="email">Email</Label>
+
+                <InputWrap>
+                  <FiMail />
+
+                  <input
+                      id="email"
+                      type="email"
+                      value={email}
+                      onChange={(event) => setEmail(event.target.value)}
+                  />
+                </InputWrap>
+              </Field>
+
+              {profileMessage && (
+                  <StatusMessage $status={profileStatus}>
+                    {profileStatus === 'success' ? <FiCheckCircle /> : <FiAlertCircle />}
+                    {profileMessage}
+                  </StatusMessage>
               )}
 
-              {profileError && <ErrorBox>{profileError}</ErrorBox>}
-
-              <AvatarUploadGrid>
-                <AvatarPreviewBox>
-                  {avatarDataUrl ? (
-                      <img src={avatarDataUrl} alt="Аватар пользователя" />
-                  ) : (
-                      <FiImage />
-                  )}
-                </AvatarPreviewBox>
-
-                <AvatarUploadContent>
-                  <Label>Аватар</Label>
-
-                  <AvatarActions>
-                    <AvatarUploadButton htmlFor="profile-avatar-file">
-                      <FiUploadCloud />
-                      Выбрать изображение
-
-                      <input
-                          id="profile-avatar-file"
-                          type="file"
-                          accept="image/*"
-                          disabled={updateProfileState.isLoading}
-                          onChange={handleAvatarChange}
-                      />
-                    </AvatarUploadButton>
-
-                    {avatarDataUrl && (
-                        <RemoveAvatarButton
-                            type="button"
-                            disabled={updateProfileState.isLoading}
-                            onClick={handleRemoveAvatar}
-                        >
-                          <FiTrash2 />
-                          Удалить
-                        </RemoveAvatarButton>
-                    )}
-                  </AvatarActions>
-
-                  <AvatarHint>
-                    Временный mock сохраняет аватар в localStorage, поэтому лучше
-                    выбрать изображение до 900 KB. Позже заменим это на загрузку
-                    файла на backend.
-                  </AvatarHint>
-                </AvatarUploadContent>
-              </AvatarUploadGrid>
-
-              <FormGrid>
-                <Field>
-                  <Label htmlFor="profile-nickname">Ник</Label>
-
-                  <InputBox>
-                    <FiUser />
-                    <input
-                        id="profile-nickname"
-                        value={nickname}
-                        disabled={updateProfileState.isLoading}
-                        placeholder="Ваш ник"
-                        onChange={(event) => {
-                          setNickname(event.target.value);
-                          setProfileSuccess(null);
-                          setProfileLocalError(null);
-                        }}
-                    />
-                  </InputBox>
-                </Field>
-
-                <Field>
-                  <Label htmlFor="profile-email">Почта</Label>
-
-                  <InputBox>
-                    <FiMail />
-                    <input
-                        id="profile-email"
-                        type="email"
-                        value={email}
-                        disabled={updateProfileState.isLoading}
-                        placeholder="you@example.com"
-                        onChange={(event) => {
-                          setEmail(event.target.value);
-                          setProfileSuccess(null);
-                          setProfileLocalError(null);
-                        }}
-                    />
-                  </InputBox>
-                </Field>
-              </FormGrid>
-
-              <SubmitButton type="submit" disabled={updateProfileState.isLoading}>
+              <SubmitButton type="submit" disabled={!canSaveProfile}>
                 <FiSave />
-                {updateProfileState.isLoading ? 'Сохраняем...' : 'Сохранить профиль'}
+                {isUpdatingProfile ? 'Сохраняем...' : 'Сохранить'}
               </SubmitButton>
-            </Section>
+            </Form>
+          </Card>
 
-            <Section as="form" onSubmit={handleChangePassword}>
-              <SectionHeader>
-                <div>
-                  <Eyebrow>Безопасность</Eyebrow>
-                  <h2>Смена пароля</h2>
-                </div>
+          <Card>
+            <CardHeader>
+              <FiLock />
 
-                <IconBox>
-                  <FiKey />
-                </IconBox>
-              </SectionHeader>
+              <div>
+                <h2>Пароль</h2>
+                <p>Смена пароля выполняется через защищенный backend endpoint.</p>
+              </div>
+            </CardHeader>
 
-              {passwordSuccess && (
-                  <SuccessBox>
-                    <FiCheckCircle />
-                    <span>{passwordSuccess}</span>
-                  </SuccessBox>
+            <Form onSubmit={handlePasswordSubmit}>
+              <Field>
+                <Label htmlFor="current-password">Текущий пароль</Label>
+
+                <InputWrap>
+                  <FiLock />
+
+                  <input
+                      id="current-password"
+                      type="password"
+                      value={currentPassword}
+                      onChange={(event) => setCurrentPassword(event.target.value)}
+                  />
+                </InputWrap>
+              </Field>
+
+              <Field>
+                <Label htmlFor="new-password">Новый пароль</Label>
+
+                <InputWrap>
+                  <FiLock />
+
+                  <input
+                      id="new-password"
+                      type="password"
+                      value={newPassword}
+                      placeholder="Минимум 6 символов"
+                      onChange={(event) => setNewPassword(event.target.value)}
+                  />
+                </InputWrap>
+              </Field>
+
+              {passwordMessage && (
+                  <StatusMessage $status={passwordStatus}>
+                    {passwordStatus === 'success' ? <FiCheckCircle /> : <FiAlertCircle />}
+                    {passwordMessage}
+                  </StatusMessage>
               )}
 
-              {passwordError && <ErrorBox>{passwordError}</ErrorBox>}
-
-              <FormGrid>
-                <Field>
-                  <Label htmlFor="current-password">Текущий пароль</Label>
-
-                  <InputBox>
-                    <FiKey />
-                    <input
-                        id="current-password"
-                        type="password"
-                        value={currentPassword}
-                        disabled={changePasswordState.isLoading}
-                        placeholder="Введите текущий пароль"
-                        onChange={(event) => {
-                          setCurrentPassword(event.target.value);
-                          setPasswordSuccess(null);
-                          setPasswordLocalError(null);
-                        }}
-                    />
-                  </InputBox>
-                </Field>
-
-                <Field>
-                  <Label htmlFor="new-password">Новый пароль</Label>
-
-                  <InputBox>
-                    <FiKey />
-                    <input
-                        id="new-password"
-                        type="password"
-                        value={newPassword}
-                        disabled={changePasswordState.isLoading}
-                        placeholder="Минимум 6 символов"
-                        onChange={(event) => {
-                          setNewPassword(event.target.value);
-                          setPasswordSuccess(null);
-                          setPasswordLocalError(null);
-                        }}
-                    />
-                  </InputBox>
-                </Field>
-              </FormGrid>
-
-              <SubmitButton type="submit" disabled={changePasswordState.isLoading}>
-                <FiKey />
-                {changePasswordState.isLoading ? 'Меняем...' : 'Сменить пароль'}
+              <SubmitButton type="submit" disabled={!canChangePassword}>
+                <FiSave />
+                {isChangingPassword ? 'Меняем...' : 'Изменить пароль'}
               </SubmitButton>
-            </Section>
-          </MainColumn>
+            </Form>
+          </Card>
 
-          <SideColumn>
-            <SubscriptionCard $active={user.hasPremium}>
-              <FiStar />
+          <Card>
+            <CardHeader>
+              <FiUploadCloud />
 
-              <h2>{user.hasPremium ? 'Premium активен' : 'Premium не активен'}</h2>
+              <div>
+                <h2>Аватар</h2>
+                <p>Загрузка идет через FormData в поле avatar.</p>
+              </div>
+            </CardHeader>
 
-              <p>
-                {user.hasPremium
-                    ? 'У вас есть доступ к закрытой ленте с премиум-публикациями.'
-                    : 'Оформите подписку, чтобы открыть закрытые фото и видео.'}
-              </p>
-
-              {user.hasPremium ? (
-                  <PremiumStatus>Подписка активна</PremiumStatus>
-              ) : (
-                  <PrimaryLink to="/subscription">Оформить подписку</PrimaryLink>
-              )}
-            </SubscriptionCard>
-
-            <QuickActions>
-              <h2>Быстрые действия</h2>
-
-              <QuickLink to="/saved">
-                <FiBookmark />
-                <span>
-                <strong>Сохраненные посты</strong>
-                <small>Публикации, которые видны только вам</small>
-              </span>
-              </QuickLink>
-
-              <QuickLink to="/submit-content">
-                <FiUpload />
-                <span>
-                <strong>Предложить контент</strong>
-                <small>Отправить заявку админу на публикацию</small>
-              </span>
-              </QuickLink>
-
-              {user.role === 'ADMIN' && (
-                  <QuickLink to="/admin">
-                    <FiShield />
-                    <span>
-                  <strong>Админ-панель</strong>
-                  <small>Посты, заявки и премиум-контент</small>
-                </span>
-                  </QuickLink>
-              )}
-            </QuickActions>
-          </SideColumn>
+            <AvatarUploadBox type="button" onClick={handleAvatarClick}>
+              <FiUploadCloud />
+              <strong>{isUploadingAvatar ? 'Загружаем...' : 'Выбрать файл'}</strong>
+              <span>JPG, PNG или WEBP до 8 MB.</span>
+            </AvatarUploadBox>
+          </Card>
         </Grid>
       </Page>
   );
 }
 
-function getApiErrorMessage(error: unknown) {
-  if (!error) {
-    return null;
+function getErrorMessage(error: unknown, fallback: string) {
+  if (
+      typeof error === 'object' &&
+      error !== null &&
+      'data' in error &&
+      typeof (error as { data?: { message?: unknown } }).data?.message === 'string'
+  ) {
+    return (error as { data: { message: string } }).data.message;
   }
 
-  if (typeof error === 'object' && error !== null && 'data' in error) {
-    const data = (error as { data?: { message?: string; error?: string } }).data;
-
-    return data?.message || data?.error || 'Не удалось выполнить запрос.';
-  }
-
-  return 'Ошибка соединения с сервером.';
+  return fallback;
 }
 
 const Page = styled.div`
@@ -525,14 +398,27 @@ const Page = styled.div`
   gap: 18px;
 `;
 
-const ProfileHero = styled.section`
+const Hero = styled.section`
   padding: 22px;
   border: 1px solid ${({ theme }) => theme.colors.border};
   border-radius: ${({ theme }) => theme.radius.lg};
   background:
-      radial-gradient(circle at top left, rgba(124, 58, 237, 0.24), transparent 34%),
-      radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.16), transparent 34%),
-      rgba(21, 25, 43, 0.86);
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.24), transparent 34%),
+    radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.16), transparent 34%),
+    rgba(21, 25, 43, 0.86);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+`;
+
+const ProfileHead = styled.div`
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 18px;
@@ -543,236 +429,115 @@ const ProfileHero = styled.section`
   }
 `;
 
-const AvatarBlock = styled.div`
+const AvatarButton = styled.button`
+  position: relative;
   flex: 0 0 auto;
-`;
-
-const AvatarImage = styled.img`
-  width: 92px;
-  height: 92px;
-  border-radius: 32px;
-  object-fit: cover;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-`;
-
-const AvatarFallback = styled.div`
-  width: 92px;
-  height: 92px;
-  border-radius: 32px;
-  background: linear-gradient(135deg, #7c3aed, #2563eb, #ef4444);
+  width: 104px;
+  height: 104px;
+  overflow: hidden;
+  border: 1px solid rgba(139, 92, 246, 0.4);
+  border-radius: 34px;
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
   color: white;
   display: grid;
   place-items: center;
-  font-size: 38px;
-  font-weight: 900;
-  box-shadow: 0 22px 50px rgba(124, 58, 237, 0.28);
-`;
-
-const ProfileInfo = styled.div`
-  min-width: 0;
-  flex: 1;
-
-  h1 {
-    margin: 10px 0 6px;
-    font-size: clamp(30px, 5vw, 48px);
-    line-height: 1;
-    letter-spacing: -0.075em;
-  }
-
-  p {
-    max-width: 640px;
-    margin: 0;
-    color: ${({ theme }) => theme.colors.textMuted};
-    line-height: 1.6;
-  }
-`;
-
-const RoleBadge = styled.div<{ $isAdmin?: boolean }>`
-  width: fit-content;
-  min-height: 34px;
-  padding: 0 12px;
-  border: 1px solid
-  ${({ $isAdmin }) =>
-      $isAdmin ? 'rgba(239, 68, 68, 0.34)' : 'rgba(124, 58, 237, 0.34)'};
-  border-radius: ${({ theme }) => theme.radius.full};
-  background: ${({ $isAdmin }) =>
-      $isAdmin ? 'rgba(239, 68, 68, 0.12)' : 'rgba(124, 58, 237, 0.12)'};
-  color: ${({ $isAdmin }) => ($isAdmin ? '#fecaca' : '#ddd6fe')};
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  font-weight: 900;
-`;
-
-const LogoutButton = styled.button`
-  flex: 0 0 auto;
-  min-height: 44px;
-  padding: 0 16px;
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  border-radius: ${({ theme }) => theme.radius.full};
-  background: rgba(239, 68, 68, 0.1);
-  color: #fecaca;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 900;
-
-  &:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.16);
-  }
-
-  &:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-`;
-
-const Grid = styled.div`
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 340px;
-  gap: 18px;
-
-  @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
-    grid-template-columns: 1fr;
-  }
-`;
-
-const MainColumn = styled.div`
-  display: grid;
-  gap: 18px;
-`;
-
-const SideColumn = styled.aside`
-  display: grid;
-  align-content: start;
-  gap: 18px;
-`;
-
-const Section = styled.section`
-  padding: 20px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: ${({ theme }) => theme.radius.lg};
-  background: rgba(21, 25, 43, 0.84);
-  display: grid;
-  gap: 16px;
-`;
-
-const SectionHeader = styled.div`
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-
-  h2 {
-    margin: 4px 0 0;
-    font-size: 24px;
-    letter-spacing: -0.05em;
-  }
-`;
-
-const Eyebrow = styled.div`
-  color: ${({ theme }) => theme.colors.primaryHover};
-  font-size: 12px;
-  font-weight: 900;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-`;
-
-const IconBox = styled.div`
-  width: 44px;
-  height: 44px;
-  border-radius: 16px;
-  background: rgba(124, 58, 237, 0.14);
-  color: ${({ theme }) => theme.colors.primaryHover};
-  display: grid;
-  place-items: center;
-  font-size: 21px;
-`;
-
-const AvatarUploadGrid = styled.div`
-  padding: 14px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: 22px;
-  background: rgba(255, 255, 255, 0.035);
-  display: grid;
-  grid-template-columns: 96px minmax(0, 1fr);
-  gap: 16px;
-  align-items: center;
-
-  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-    grid-template-columns: 1fr;
-  }
-`;
-
-const AvatarPreviewBox = styled.div`
-  width: 96px;
-  height: 96px;
-  overflow: hidden;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: 32px;
-  background:
-      radial-gradient(circle at top left, rgba(124, 58, 237, 0.3), transparent 40%),
-      rgba(255, 255, 255, 0.05);
-  color: ${({ theme }) => theme.colors.primaryHover};
-  display: grid;
-  place-items: center;
-  font-size: 34px;
+  font-size: 44px;
+  box-shadow: 0 22px 52px rgba(124, 58, 237, 0.26);
 
   img {
     width: 100%;
     height: 100%;
     object-fit: cover;
   }
+
+  &:hover div {
+    opacity: 1;
+  }
 `;
 
-const AvatarUploadContent = styled.div`
-  min-width: 0;
+const AvatarOverlay = styled.div`
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.48);
   display: grid;
-  gap: 10px;
+  place-items: center;
+  opacity: 0;
+  transition: 0.2s ease;
 `;
 
-const AvatarActions = styled.div`
+const HeroText = styled.div`
+  min-width: 0;
+`;
+
+const Eyebrow = styled.div`
+  margin-bottom: 8px;
+  color: ${({ theme }) => theme.colors.primaryHover};
+  font-size: 13px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+`;
+
+const Title = styled.h1`
+  margin: 0;
+  font-size: clamp(30px, 5vw, 52px);
+  line-height: 0.96;
+  letter-spacing: -0.075em;
+`;
+
+const Subtitle = styled.p`
+  max-width: 720px;
+  margin: 12px 0 0;
+  color: ${({ theme }) => theme.colors.textMuted};
+  line-height: 1.65;
+`;
+
+const Badges = styled.div`
+  margin-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+`;
+
+const Badge = styled.div`
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: rgba(255, 255, 255, 0.055);
+  color: ${({ theme }) => theme.colors.text};
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 900;
+
+  svg {
+    color: ${({ theme }) => theme.colors.primaryHover};
+  }
+`;
+
+const HeroActions = styled.div`
+  flex: 0 0 auto;
   display: flex;
   flex-wrap: wrap;
   gap: 9px;
 `;
 
-const AvatarUploadButton = styled.label`
-  min-height: 42px;
-  padding: 0 14px;
+const RefreshButton = styled.button`
+  min-height: 46px;
+  padding: 0 16px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
   border-radius: ${({ theme }) => theme.radius.full};
-  background: linear-gradient(135deg, #7c3aed, #2563eb);
-  color: white;
+  background: rgba(255, 255, 255, 0.06);
+  color: ${({ theme }) => theme.colors.text};
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  font-weight: 900;
-  cursor: pointer;
-
-  input {
-    display: none;
-  }
-
-  &:hover {
-    filter: brightness(1.08);
-  }
-`;
-
-const RemoveAvatarButton = styled.button`
-  min-height: 42px;
-  padding: 0 14px;
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  border-radius: ${({ theme }) => theme.radius.full};
-  background: rgba(239, 68, 68, 0.1);
-  color: #fecaca;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
+  gap: 9px;
   font-weight: 900;
 
   &:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.16);
+    background: rgba(255, 255, 255, 0.1);
   }
 
   &:disabled {
@@ -781,21 +546,71 @@ const RemoveAvatarButton = styled.button`
   }
 `;
 
-const AvatarHint = styled.p`
-  margin: 0;
-  color: ${({ theme }) => theme.colors.textMuted};
-  font-size: 13px;
-  line-height: 1.5;
+const LogoutButton = styled(RefreshButton)`
+  border-color: rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.1);
+  color: #fecaca;
+
+  &:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.16);
+  }
 `;
 
-const FormGrid = styled.div`
+const Grid = styled.div`
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: 18px;
 
-  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+  > article:last-child {
+    grid-column: 1 / -1;
+  }
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
     grid-template-columns: 1fr;
   }
+`;
+
+const Card = styled.article`
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background: rgba(21, 25, 43, 0.84);
+  display: grid;
+  gap: 18px;
+`;
+
+const CardHeader = styled.div`
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+
+  > svg {
+    flex: 0 0 auto;
+    width: 44px;
+    height: 44px;
+    padding: 11px;
+    border-radius: 16px;
+    background: rgba(124, 58, 237, 0.14);
+    color: ${({ theme }) => theme.colors.primaryHover};
+  }
+
+  h2 {
+    margin: 0 0 5px;
+    font-size: 24px;
+    letter-spacing: -0.05em;
+  }
+
+  p {
+    margin: 0;
+    color: ${({ theme }) => theme.colors.textMuted};
+    line-height: 1.45;
+  }
+`;
+
+const Form = styled.form`
+  display: grid;
+  gap: 14px;
 `;
 
 const Field = styled.div`
@@ -804,87 +619,56 @@ const Field = styled.div`
 `;
 
 const Label = styled.label`
-  color: ${({ theme }) => theme.colors.textMuted};
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 900;
 `;
 
-const InputBox = styled.div`
-  height: 52px;
-  padding: 0 15px;
+const InputWrap = styled.div`
+  min-height: 48px;
+  padding: 0 14px;
   border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: 18px;
+  border-radius: 16px;
   background: rgba(255, 255, 255, 0.045);
-  color: ${({ theme }) => theme.colors.textMuted};
   display: flex;
   align-items: center;
   gap: 10px;
 
-  &:focus-within {
-    border-color: rgba(139, 92, 246, 0.75);
-    box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.13);
-  }
-
   svg {
     flex: 0 0 auto;
-    font-size: 18px;
+    color: ${({ theme }) => theme.colors.textMuted};
   }
 
   input {
     width: 100%;
     min-width: 0;
-    border: none;
-    outline: none;
+    border: 0;
+    outline: 0;
     background: transparent;
     color: ${({ theme }) => theme.colors.text};
   }
 
-  input::placeholder {
-    color: rgba(156, 163, 183, 0.68);
-  }
-
-  input:disabled {
-    cursor: not-allowed;
+  &:focus-within {
+    border-color: rgba(139, 92, 246, 0.72);
+    box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.12);
   }
 `;
 
-const SubmitButton = styled.button`
-  width: fit-content;
-  min-height: 46px;
-  padding: 0 16px;
-  border: none;
-  border-radius: ${({ theme }) => theme.radius.full};
-  background: linear-gradient(135deg, #7c3aed, #2563eb);
-  color: white;
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  font-weight: 900;
-  box-shadow: 0 16px 38px rgba(124, 58, 237, 0.22);
-
-  &:hover:not(:disabled) {
-    filter: brightness(1.08);
-  }
-
-  &:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-
-  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-    width: 100%;
-    justify-content: center;
-  }
-`;
-
-const SuccessBox = styled.div`
+const StatusMessage = styled.div<{ $status: MessageStatus }>`
   padding: 13px 14px;
-  border: 1px solid rgba(34, 197, 94, 0.32);
+  border: 1px solid
+    ${({ $status }) =>
+    $status === 'success'
+        ? 'rgba(34, 197, 94, 0.34)'
+        : 'rgba(239, 68, 68, 0.34)'};
   border-radius: 18px;
-  background: rgba(34, 197, 94, 0.1);
-  color: #bbf7d0;
+  background: ${({ $status }) =>
+    $status === 'success'
+        ? 'rgba(34, 197, 94, 0.1)'
+        : 'rgba(239, 68, 68, 0.1)'};
+  color: ${({ $status }) => ($status === 'success' ? '#bbf7d0' : '#fecaca')};
   display: flex;
-  gap: 10px;
+  align-items: flex-start;
+  gap: 9px;
   line-height: 1.45;
   font-weight: 800;
 
@@ -894,121 +678,62 @@ const SuccessBox = styled.div`
   }
 `;
 
-const ErrorBox = styled.div`
-  padding: 13px 14px;
-  border: 1px solid rgba(239, 68, 68, 0.32);
-  border-radius: 18px;
-  background: rgba(239, 68, 68, 0.1);
-  color: #fecaca;
-  line-height: 1.45;
-  font-weight: 800;
-`;
-
-const SubscriptionCard = styled.section<{ $active?: boolean }>`
-  padding: 22px;
-  border: 1px solid
-    ${({ $active }) =>
-    $active ? 'rgba(34, 197, 94, 0.34)' : 'rgba(236, 72, 153, 0.3)'};
-  border-radius: ${({ theme }) => theme.radius.lg};
-  background:
-    radial-gradient(circle at top left, rgba(236, 72, 153, 0.18), transparent 36%),
-    rgba(21, 25, 43, 0.86);
-
-  > svg {
-    margin-bottom: 14px;
-    color: ${({ $active }) => ($active ? '#86efac' : '#f9a8d4')};
-    font-size: 38px;
-  }
-
-  h2 {
-    margin: 0 0 8px;
-    font-size: 25px;
-    letter-spacing: -0.05em;
-  }
-
-  p {
-    margin: 0 0 18px;
-    color: ${({ theme }) => theme.colors.textMuted};
-    line-height: 1.55;
-  }
-`;
-
-const PrimaryLink = styled(Link)`
-  min-height: 46px;
-  padding: 0 16px;
+const SubmitButton = styled.button`
+  min-height: 50px;
+  border: none;
   border-radius: ${({ theme }) => theme.radius.full};
-  background: linear-gradient(135deg, #7c3aed, #ec4899);
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
   color: white;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 9px;
   font-weight: 900;
 
-  &:hover {
+  &:hover:not(:disabled) {
     filter: brightness(1.08);
   }
+
+  &:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
 `;
 
-const PremiumStatus = styled.div`
-  min-height: 42px;
-  padding: 0 14px;
-  border-radius: ${({ theme }) => theme.radius.full};
-  background: rgba(34, 197, 94, 0.12);
-  color: #86efac;
-  display: inline-flex;
-  align-items: center;
-  font-weight: 900;
-`;
-
-const QuickActions = styled.section`
-  padding: 18px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
+const AvatarUploadBox = styled.button`
+  min-height: 180px;
+  padding: 24px;
+  border: 1px dashed rgba(139, 92, 246, 0.46);
   border-radius: ${({ theme }) => theme.radius.lg};
-  background: rgba(21, 25, 43, 0.84);
-  display: grid;
-  gap: 10px;
-
-  h2 {
-    margin: 0 0 6px;
-    font-size: 22px;
-    letter-spacing: -0.05em;
-  }
-`;
-
-const QuickLink = styled(Link)`
-  padding: 14px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.04);
+  background:
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.18), transparent 34%),
+    rgba(255, 255, 255, 0.035);
   color: ${({ theme }) => theme.colors.text};
-  display: flex;
-  align-items: center;
-  gap: 12px;
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  text-align: center;
 
-  > svg {
-    flex: 0 0 auto;
+  svg {
     color: ${({ theme }) => theme.colors.primaryHover};
-    font-size: 22px;
-  }
-
-  span {
-    min-width: 0;
-    display: grid;
-    gap: 3px;
+    font-size: 42px;
   }
 
   strong {
-    font-size: 14px;
+    font-size: 20px;
+    letter-spacing: -0.04em;
   }
 
-  small {
+  span {
     color: ${({ theme }) => theme.colors.textMuted};
-    line-height: 1.35;
+    font-weight: 700;
   }
 
   &:hover {
-    background: rgba(255, 255, 255, 0.075);
-    border-color: rgba(139, 92, 246, 0.42);
+    border-color: rgba(139, 92, 246, 0.72);
+    background:
+      radial-gradient(circle at top left, rgba(124, 58, 237, 0.22), transparent 34%),
+      rgba(255, 255, 255, 0.055);
   }
 `;
 
@@ -1026,7 +751,7 @@ const StateCard = styled.section`
   justify-content: center;
   text-align: center;
 
-  svg {
+  > svg {
     margin-bottom: 16px;
     color: ${({ theme }) => theme.colors.primaryHover};
     font-size: 44px;
@@ -1039,7 +764,7 @@ const StateCard = styled.section`
   }
 
   p {
-    max-width: 480px;
+    max-width: 520px;
     margin: 0;
     color: ${({ theme }) => theme.colors.textMuted};
     line-height: 1.6;

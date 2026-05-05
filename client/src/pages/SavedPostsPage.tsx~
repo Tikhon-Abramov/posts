@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+/* eslint-disable react-hooks/set-state-in-effect */
+
+import { useEffect, useMemo, useRef, useState } from 'react';
 import styled from 'styled-components';
 import {
     FiAlertCircle,
@@ -25,6 +27,7 @@ const FEED_LIMIT = 10;
 
 export function SavedPostsPage() {
     const loadMoreRef = useRef<HTMLDivElement | null>(null);
+    const isFiltersMountedRef = useRef(false);
 
     const [searchQuery, setSearchQuery] = useState('');
     const [mediaFilter, setMediaFilter] = useState<MediaFilter>('ALL');
@@ -41,22 +44,46 @@ export function SavedPostsPage() {
         isFetching,
         isError,
         refetch,
-    } = useGetSavedPostsQuery({
-        cursor,
-        limit: FEED_LIMIT,
-        search: searchQuery,
-        mediaType: mediaFilter,
-        sort: sortMode,
-    });
+    } = useGetSavedPostsQuery(
+        {
+            cursor: cursor || undefined,
+            limit: FEED_LIMIT,
+            search: searchQuery,
+            mediaType: mediaFilter,
+            sort: sortMode,
+        },
+        {
+            refetchOnMountOrArgChange: true,
+        }
+    );
 
     const {
         data: stats,
         isLoading: isStatsLoading,
         refetch: refetchStats,
-    } = useGetSavedPostsStatsQuery();
+    } = useGetSavedPostsStatsQuery(undefined, {
+        refetchOnMountOrArgChange: true,
+    });
 
-    const isFirstLoading = isLoading && loadedPosts.length === 0;
-    const isLoadingMore = isFetching && loadedPosts.length > 0;
+    const dataPosts = useMemo(() => data?.items || data?.posts || [], [data]);
+
+    const visiblePosts = useMemo(() => {
+        if (loadedPosts.length) {
+            return loadedPosts;
+        }
+
+        return dataPosts;
+    }, [dataPosts, loadedPosts]);
+
+    const isFirstLoading =
+        (isLoading || isFetching) && visiblePosts.length === 0 && !data;
+
+    const isLoadingMore = isFetching && visiblePosts.length > 0;
+
+    useEffect(() => {
+        refetch();
+        refetchStats();
+    }, [refetch, refetchStats]);
 
     useEffect(() => {
         if (!data) {
@@ -67,10 +94,10 @@ export function SavedPostsPage() {
 
         setLoadedPosts((currentPosts) => {
             if (!cursor) {
-                return items;
+                return mergePostsKeepingFirstPriority(items, currentPosts);
             }
 
-            return mergePostsKeepingOrder(currentPosts, items);
+            return mergePostsKeepingFirstPriority(currentPosts, items);
         });
 
         setNextCursor(data.nextCursor);
@@ -78,6 +105,11 @@ export function SavedPostsPage() {
     }, [cursor, data]);
 
     useEffect(() => {
+        if (!isFiltersMountedRef.current) {
+            isFiltersMountedRef.current = true;
+            return;
+        }
+
         setCursor(null);
         setLoadedPosts([]);
         setNextCursor(null);
@@ -121,6 +153,14 @@ export function SavedPostsPage() {
         setSearchQuery('');
         setMediaFilter('ALL');
         setSortMode('RECENT');
+
+        setCursor(null);
+        setLoadedPosts([]);
+        setNextCursor(null);
+        setHasMore(true);
+
+        refetch();
+        refetchStats();
     };
 
     const handleRefetch = () => {
@@ -128,6 +168,7 @@ export function SavedPostsPage() {
         setLoadedPosts([]);
         setNextCursor(null);
         setHasMore(true);
+
         refetch();
         refetchStats();
     };
@@ -135,22 +176,25 @@ export function SavedPostsPage() {
     if (isFirstLoading) {
         return (
             <StateCard>
-                <FiBookmark />
+                <FiLoader />
+
                 <h1>Загружаем сохраненные</h1>
+
                 <p>Сейчас покажем публикации, которые вы сохранили в профиль.</p>
             </StateCard>
         );
     }
 
-    if (isError && !loadedPosts.length) {
+    if (isError && !visiblePosts.length) {
         return (
             <StateCard>
                 <FiAlertCircle />
+
                 <h1>Не удалось загрузить сохраненные</h1>
+
                 <p>Попробуйте обновить список сохраненных публикаций.</p>
 
                 <PrimaryButton type="button" onClick={handleRefetch}>
-                    <FiRefreshCw />
                     Повторить
                 </PrimaryButton>
             </StateCard>
@@ -159,27 +203,10 @@ export function SavedPostsPage() {
 
     return (
         <Page>
-            <Hero>
-                <HeroContent>
-                    <Eyebrow>Личный раздел</Eyebrow>
-
-                    <Title>Сохраненные посты</Title>
-
-                    <Subtitle>
-                        Здесь находятся публикации, которые вы сохранили. Другие пользователи
-                        не видят, что именно вы добавили в сохраненные.
-                    </Subtitle>
-                </HeroContent>
-
-                <HeroBadge>
-                    <FiBookmark />
-                    Private
-                </HeroBadge>
-            </Hero>
-
             <StatsGrid>
                 <StatCard>
                     <FiBookmark />
+
                     <div>
                         <strong>{isStatsLoading ? '...' : stats?.total || 0}</strong>
                         <span>Всего сохранено</span>
@@ -188,6 +215,7 @@ export function SavedPostsPage() {
 
                 <StatCard>
                     <FiImage />
+
                     <div>
                         <strong>{isStatsLoading ? '...' : stats?.imagesCount || 0}</strong>
                         <span>Фото</span>
@@ -196,6 +224,7 @@ export function SavedPostsPage() {
 
                 <StatCard>
                     <FiVideo />
+
                     <div>
                         <strong>{isStatsLoading ? '...' : stats?.videosCount || 0}</strong>
                         <span>Видео</span>
@@ -208,9 +237,8 @@ export function SavedPostsPage() {
                     <FiSearch />
 
                     <input
-                        type="text"
                         value={searchQuery}
-                        placeholder="Поиск по сохраненным: название, описание, автор..."
+                        placeholder="Поиск по сохраненным публикациям..."
                         onChange={(event) => setSearchQuery(event.target.value)}
                     />
                 </SearchBox>
@@ -239,18 +267,13 @@ export function SavedPostsPage() {
                         <FiFilter />
                         Сбросить
                     </ResetButton>
-
-                    <RefreshButton type="button" disabled={isFetching} onClick={handleRefetch}>
-                        <FiRefreshCw />
-                        Обновить
-                    </RefreshButton>
                 </ToolbarActions>
             </Toolbar>
 
-            {loadedPosts.length ? (
+            {visiblePosts.length ? (
                 <>
                     <FeedMeta>
-                        <span>Загружено на странице: {loadedPosts.length}</span>
+                        <span>Загружено на странице: {visiblePosts.length}</span>
 
                         {isLoadingMore && (
                             <LoadingInline>
@@ -260,13 +283,15 @@ export function SavedPostsPage() {
                         )}
                     </FeedMeta>
 
-                    <PostGrid posts={loadedPosts} />
+                    <PostGrid posts={visiblePosts} />
 
                     <LoadMoreAnchor ref={loadMoreRef}>
                         {hasMore ? (
                             <LoadingMore>
                                 <FiLoader />
-                                <span>Листайте ниже — сохраненные посты подгрузятся автоматически</span>
+                                <span>
+                  Листайте ниже — сохраненные посты подгрузятся автоматически
+                </span>
                             </LoadingMore>
                         ) : (
                             <EndMessage>
@@ -277,7 +302,7 @@ export function SavedPostsPage() {
                 </>
             ) : (
                 <EmptyCard>
-                    <FiSearch />
+                    <FiAlertCircle />
 
                     <h2>Сохраненных постов не найдено</h2>
 
@@ -295,79 +320,25 @@ export function SavedPostsPage() {
     );
 }
 
-function mergePostsKeepingOrder(first: Post[], second: Post[]) {
-    const map = new Map<number, Post>();
+function mergePostsKeepingFirstPriority(first: Post[], second: Post[]) {
+    const result: Post[] = [];
+    const seen = new Set<number>();
 
     [...first, ...second].forEach((post) => {
-        map.set(post.id, post);
+        if (seen.has(post.id)) {
+            return;
+        }
+
+        seen.add(post.id);
+        result.push(post);
     });
 
-    return Array.from(map.values());
+    return result;
 }
 
 const Page = styled.div`
     display: grid;
     gap: 18px;
-`;
-
-const Hero = styled.section`
-    padding: 22px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.lg};
-    background:
-            radial-gradient(circle at top left, rgba(124, 58, 237, 0.22), transparent 34%),
-            radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.16), transparent 34%),
-            rgba(21, 25, 43, 0.86);
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 18px;
-
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        flex-direction: column;
-        padding: 18px;
-    }
-`;
-
-const HeroContent = styled.div`
-    min-width: 0;
-`;
-
-const Eyebrow = styled.div`
-    margin-bottom: 8px;
-    color: ${({ theme }) => theme.colors.primaryHover};
-    font-size: 13px;
-    font-weight: 900;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-`;
-
-const Title = styled.h1`
-    margin: 0;
-    font-size: clamp(30px, 5vw, 52px);
-    line-height: 0.96;
-    letter-spacing: -0.075em;
-`;
-
-const Subtitle = styled.p`
-    max-width: 720px;
-    margin: 12px 0 0;
-    color: ${({ theme }) => theme.colors.textMuted};
-    line-height: 1.65;
-`;
-
-const HeroBadge = styled.div`
-    flex: 0 0 auto;
-    min-height: 42px;
-    padding: 0 14px;
-    border: 1px solid rgba(124, 58, 237, 0.36);
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(124, 58, 237, 0.12);
-    color: #ddd6fe;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    font-weight: 900;
 `;
 
 const StatsGrid = styled.div`
@@ -443,11 +414,6 @@ const SearchBox = styled.div`
     align-items: center;
     gap: 10px;
 
-    svg {
-        flex: 0 0 auto;
-        font-size: 18px;
-    }
-
     input {
         width: 100%;
         min-width: 0;
@@ -455,15 +421,6 @@ const SearchBox = styled.div`
         outline: none;
         background: transparent;
         color: ${({ theme }) => theme.colors.text};
-    }
-
-    input::placeholder {
-        color: rgba(156, 163, 183, 0.68);
-    }
-
-    &:focus-within {
-        border-color: rgba(139, 92, 246, 0.72);
-        box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.12);
     }
 `;
 
@@ -491,10 +448,6 @@ const FilterSelect = styled.select`
         background: #101322;
         color: white;
     }
-
-    &:focus {
-        border-color: rgba(139, 92, 246, 0.72);
-    }
 `;
 
 const ToolbarActions = styled.div`
@@ -508,7 +461,6 @@ const ToolbarActions = styled.div`
 `;
 
 const RefreshButton = styled.button`
-    flex: 0 0 auto;
     min-height: 46px;
     padding: 0 16px;
     border: 1px solid ${({ theme }) => theme.colors.border};
@@ -520,36 +472,9 @@ const RefreshButton = styled.button`
     justify-content: center;
     gap: 9px;
     font-weight: 900;
-
-    &:hover:not(:disabled) {
-        background: rgba(255, 255, 255, 0.09);
-        border-color: rgba(139, 92, 246, 0.45);
-    }
-
-    &:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-    }
 `;
 
-const ResetButton = styled.button`
-    min-height: 46px;
-    padding: 0 16px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(255, 255, 255, 0.055);
-    color: ${({ theme }) => theme.colors.text};
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 9px;
-    font-weight: 900;
-
-    &:hover {
-        background: rgba(255, 255, 255, 0.09);
-        border-color: rgba(139, 92, 246, 0.45);
-    }
-`;
+const ResetButton = styled(RefreshButton)``;
 
 const FeedMeta = styled.div`
     padding: 0 4px;
@@ -560,11 +485,6 @@ const FeedMeta = styled.div`
     gap: 12px;
     font-size: 13px;
     font-weight: 800;
-
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        align-items: flex-start;
-        flex-direction: column;
-    }
 `;
 
 const LoadingInline = styled.div`
@@ -606,18 +526,12 @@ const LoadingMore = styled.div`
         color: ${({ theme }) => theme.colors.primaryHover};
         animation: spin 0.8s linear infinite;
     }
-
-    @keyframes spin {
-        to {
-            transform: rotate(360deg);
-        }
-    }
 `;
 
 const EndMessage = styled.div`
-  color: ${({ theme }) => theme.colors.textMuted};
-  font-size: 13px;
-  font-weight: 800;
+    color: ${({ theme }) => theme.colors.textMuted};
+    font-size: 13px;
+    font-weight: 800;
 `;
 
 const EmptyCard = styled.section`
@@ -625,9 +539,7 @@ const EmptyCard = styled.section`
   padding: 30px 22px;
   border: 1px solid ${({ theme }) => theme.colors.border};
   border-radius: ${({ theme }) => theme.radius.lg};
-  background:
-    radial-gradient(circle at top left, rgba(124, 58, 237, 0.2), transparent 34%),
-    rgba(21, 25, 43, 0.86);
+  background: rgba(21, 25, 43, 0.86);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -655,69 +567,46 @@ const EmptyCard = styled.section`
 `;
 
 const EmptyButton = styled.button`
-  min-height: 46px;
-  margin-top: 22px;
-  padding: 0 16px;
-  border: none;
-  border-radius: ${({ theme }) => theme.radius.full};
-  background: linear-gradient(135deg, #7c3aed, #2563eb);
-  color: white;
-  font-weight: 900;
-
-  &:hover {
-    filter: brightness(1.08);
-  }
+    min-height: 46px;
+    margin-top: 22px;
+    padding: 0 16px;
+    border: none;
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: linear-gradient(135deg, #7c3aed, #2563eb);
+    color: white;
+    font-weight: 900;
 `;
 
-const PrimaryButton = styled.button`
-  min-height: 48px;
-  margin-top: 22px;
-  padding: 0 18px;
-  border: none;
-  border-radius: ${({ theme }) => theme.radius.full};
-  background: linear-gradient(135deg, #7c3aed, #2563eb);
-  color: white;
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  font-weight: 900;
-  box-shadow: 0 18px 44px rgba(124, 58, 237, 0.22);
-
-  &:hover {
-    filter: brightness(1.08);
-  }
-`;
+const PrimaryButton = styled(EmptyButton)``;
 
 const StateCard = styled.section`
-  min-height: 420px;
-  padding: 30px 22px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: ${({ theme }) => theme.radius.lg};
-  background:
-    radial-gradient(circle at top left, rgba(124, 58, 237, 0.2), transparent 34%),
-    rgba(21, 25, 43, 0.86);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
+    min-height: 420px;
+    padding: 30px 22px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: ${({ theme }) => theme.radius.lg};
+    background: rgba(21, 25, 43, 0.86);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
 
-  > svg {
-    margin-bottom: 16px;
-    color: ${({ theme }) => theme.colors.primaryHover};
-    font-size: 44px;
-  }
+    > svg {
+        margin-bottom: 16px;
+        color: ${({ theme }) => theme.colors.primaryHover};
+        font-size: 44px;
+    }
 
-  h1 {
-    margin: 0 0 10px;
-    font-size: clamp(26px, 4vw, 40px);
-    letter-spacing: -0.06em;
-  }
+    h1 {
+        margin: 0 0 10px;
+        font-size: clamp(26px, 4vw, 40px);
+        letter-spacing: -0.06em;
+    }
 
-  p {
-    max-width: 500px;
-    margin: 0;
-    color: ${({ theme }) => theme.colors.textMuted};
-    line-height: 1.6;
-  }
+    p {
+        max-width: 500px;
+        margin: 0;
+        color: ${({ theme }) => theme.colors.textMuted};
+        line-height: 1.6;
+    }
 `;

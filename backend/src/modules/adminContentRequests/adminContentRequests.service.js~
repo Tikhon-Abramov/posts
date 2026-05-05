@@ -82,8 +82,38 @@ function mapContentRequestRow(row) {
     };
 }
 
+function mapPostRow(row) {
+    return {
+        id: Number(row.id),
+        title: row.title,
+        description: row.description || '',
+        visibility: row.visibility,
+        media: row.media_id
+            ? [
+                {
+                    id: Number(row.media_id),
+                    type: row.media_type,
+                    url: row.media_url,
+                },
+            ]
+            : [],
+        author: {
+            id: Number(row.author_id),
+            nickname: row.author_nickname,
+            avatarUrl: row.author_avatar_url || null,
+        },
+        likesCount: 0,
+        dislikesCount: 0,
+        commentsCount: 0,
+        isLikedByMe: false,
+        isDislikedByMe: false,
+        isSavedByMe: false,
+        createdAt: toIsoDate(row.created_at),
+    };
+}
+
 function buildCursorCondition({ cursor, params }) {
-    if (!cursor || cursor === 'null' || cursor === 'undefined') {
+    if (!cursor) {
         return '';
     }
 
@@ -144,9 +174,10 @@ function buildMediaCondition({ mediaType, params }) {
 
 async function getContentRequests({ query }) {
     const limit = parseLimit(query.limit);
-    const sqlLimit = limit + 1;
 
-    const params = {};
+    const params = {
+        limit: limit + 1,
+    };
 
     const searchCondition = buildSearchCondition({
         search: query.search,
@@ -193,7 +224,7 @@ async function getContentRequests({ query }) {
         ${mediaCondition}
         ${cursorCondition}
       ORDER BY cr.created_at DESC, cr.id DESC
-      LIMIT ${sqlLimit}
+      LIMIT :limit
     `,
         params
     );
@@ -417,16 +448,16 @@ async function rejectContentRequest({ requestId }) {
 
         const [requestRows] = await connection.execute(
             `
-                SELECT
-                    id,
-                    user_id,
-                    title,
-                    status
-                FROM content_requests
-                WHERE id = :requestId
-                    LIMIT 1
+        SELECT
+          id,
+          user_id,
+          title,
+          status
+        FROM content_requests
+        WHERE id = :requestId
+        LIMIT 1
         FOR UPDATE
-            `,
+      `,
             {
                 requestId: normalizedRequestId,
             }
@@ -444,12 +475,12 @@ async function rejectContentRequest({ requestId }) {
 
         await connection.execute(
             `
-                UPDATE content_requests
-                SET
-                    status = 'REJECTED',
-                    reviewed_at = NOW()
-                WHERE id = :requestId
-            `,
+        UPDATE content_requests
+        SET
+          status = 'REJECTED',
+          reviewed_at = NOW()
+        WHERE id = :requestId
+      `,
             {
                 requestId: normalizedRequestId,
             }
@@ -457,25 +488,25 @@ async function rejectContentRequest({ requestId }) {
 
         await connection.execute(
             `
-                INSERT INTO notifications (
-                    user_id,
-                    type,
-                    title,
-                    text,
-                    is_read,
-                    post_id,
-                    request_id
-                )
-                VALUES (
-                           :userId,
-                           'REQUEST_REJECTED',
-                           'Публикация отклонена',
-                           :text,
-                           FALSE,
-                           NULL,
-                           :requestId
-                       )
-            `,
+        INSERT INTO notifications (
+          user_id,
+          type,
+          title,
+          text,
+          is_read,
+          post_id,
+          request_id
+        )
+        VALUES (
+          :userId,
+          'REQUEST_REJECTED',
+          'Публикация отклонена',
+          :text,
+          FALSE,
+          NULL,
+          :requestId
+        )
+      `,
             {
                 userId: request.user_id,
                 text: `Ваша заявка «${request.title}» была отклонена администратором.`,

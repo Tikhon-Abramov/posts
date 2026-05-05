@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type {ChangeEvent, FormEvent} from 'react';
+import type { ChangeEvent, FormEvent } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import styled from 'styled-components';
 import {
@@ -19,7 +19,10 @@ import {
 
 import type { AppDispatch, RootState } from '../app/store';
 import { logout } from '../entities/auth/slice/authSlice';
-import { useChangePasswordMutation, useGetMeQuery } from '../entities/auth/api/authApi';
+import {
+  useChangePasswordMutation,
+  useGetMeQuery,
+} from '../entities/auth/api/authApi';
 import {
   useUpdateMeMutation,
   useUploadAvatarMutation,
@@ -35,7 +38,8 @@ export function ProfilePage() {
   const { accessToken, user } = useSelector((state: RootState) => state.auth);
 
   const [updateMe, { isLoading: isUpdatingProfile }] = useUpdateMeMutation();
-  const [uploadAvatar, { isLoading: isUploadingAvatar }] = useUploadAvatarMutation();
+  const [uploadAvatar, { isLoading: isUploadingAvatar }] =
+      useUploadAvatarMutation();
   const [changePassword, { isLoading: isChangingPassword }] =
       useChangePasswordMutation();
 
@@ -43,6 +47,9 @@ export function ProfilePage() {
       undefined,
       {
         skip: !accessToken,
+        refetchOnMountOrArgChange: true,
+        refetchOnFocus: true,
+        refetchOnReconnect: true,
       }
   );
 
@@ -61,7 +68,9 @@ export function ProfilePage() {
   const [avatarStatus, setAvatarStatus] = useState<MessageStatus>('idle');
   const [avatarMessage, setAvatarMessage] = useState('');
 
-  const avatarUrl = useMemo(() => getMediaUrl(user?.avatarUrl), [user?.avatarUrl]);
+  const avatarUrl = useMemo(() => {
+    return getMediaUrl(user?.avatarUrl);
+  }, [user?.avatarUrl]);
 
   useEffect(() => {
     if (!user) {
@@ -123,7 +132,6 @@ export function ProfilePage() {
 
       setCurrentPassword('');
       setNewPassword('');
-
       setPasswordStatus('success');
       setPasswordMessage('Пароль изменен.');
     } catch (error) {
@@ -152,6 +160,14 @@ export function ProfilePage() {
       return;
     }
 
+    const maxSizeBytes = 8 * 1024 * 1024;
+
+    if (file.size > maxSizeBytes) {
+      setAvatarStatus('error');
+      setAvatarMessage('Изображение не должно быть больше 8 MB.');
+      return;
+    }
+
     try {
       await uploadAvatar(file).unwrap();
 
@@ -165,6 +181,10 @@ export function ProfilePage() {
         fileInputRef.current.value = '';
       }
     }
+  };
+
+  const handleRefreshProfile = () => {
+    refetchMe();
   };
 
   const handleLogout = () => {
@@ -185,8 +205,8 @@ export function ProfilePage() {
 
   return (
       <Page>
-        <Hero>
-          <ProfileHead>
+        <Grid>
+          <AccountCard>
             <AvatarButton type="button" onClick={handleAvatarClick}>
               {avatarUrl ? <img src={avatarUrl} alt={user.nickname} /> : <FiUser />}
 
@@ -195,23 +215,16 @@ export function ProfilePage() {
               </AvatarOverlay>
             </AvatarButton>
 
-            <input
+            <HiddenFileInput
                 ref={fileInputRef}
                 type="file"
-                accept="image/jpeg,image/png,image/webp"
-                hidden
+                accept="image/*"
                 onChange={handleAvatarChange}
             />
 
-            <HeroText>
-              <Eyebrow>Профиль</Eyebrow>
-
-              <Title>@{user.nickname}</Title>
-
-              <Subtitle>
-                Управление аккаунтом, аватаром и паролем. Роль и Premium-доступ
-                берутся только с backend и не редактируются пользователем.
-              </Subtitle>
+            <AccountInfo>
+              <Nickname>@{user.nickname}</Nickname>
+              <Email>{user.email}</Email>
 
               <Badges>
                 <Badge>
@@ -224,30 +237,32 @@ export function ProfilePage() {
                   {user.hasPremium ? 'Premium активен' : 'Без подписки'}
                 </Badge>
               </Badges>
-            </HeroText>
-          </ProfileHead>
+            </AccountInfo>
 
-          <HeroActions>
-            <RefreshButton type="button" disabled={isRefetchingMe} onClick={() => refetchMe()}>
-              <FiRefreshCw />
-              {isRefetchingMe ? 'Обновляем...' : 'Обновить'}
-            </RefreshButton>
+            <AccountActions>
+              <RefreshButton
+                  type="button"
+                  disabled={isRefetchingMe}
+                  onClick={handleRefreshProfile}
+              >
+                <FiRefreshCw />
+                {isRefetchingMe ? 'Обновляем...' : 'Обновить'}
+              </RefreshButton>
 
-            <LogoutButton type="button" onClick={handleLogout}>
-              <FiLogOut />
-              Выйти
-            </LogoutButton>
-          </HeroActions>
-        </Hero>
+              <LogoutButton type="button" onClick={handleLogout}>
+                <FiLogOut />
+                Выйти
+              </LogoutButton>
+            </AccountActions>
 
-        {avatarMessage && (
-            <StatusMessage $status={avatarStatus}>
-              {avatarStatus === 'success' ? <FiCheckCircle /> : <FiAlertCircle />}
-              {avatarMessage}
-            </StatusMessage>
-        )}
+            {avatarMessage && (
+                <StatusMessage $status={avatarStatus}>
+                  {avatarStatus === 'success' ? <FiCheckCircle /> : <FiAlertCircle />}
+                  {avatarMessage}
+                </StatusMessage>
+            )}
+          </AccountCard>
 
-        <Grid>
           <Card>
             <CardHeader>
               <FiUser />
@@ -260,30 +275,31 @@ export function ProfilePage() {
 
             <Form onSubmit={handleProfileSubmit}>
               <Field>
-                <Label htmlFor="nickname">Никнейм</Label>
+                <Label>Никнейм</Label>
 
                 <InputWrap>
                   <FiUser />
 
                   <input
-                      id="nickname"
                       value={nickname}
-                      maxLength={50}
+                      minLength={3}
+                      maxLength={30}
+                      placeholder="nickname"
                       onChange={(event) => setNickname(event.target.value)}
                   />
                 </InputWrap>
               </Field>
 
               <Field>
-                <Label htmlFor="email">Email</Label>
+                <Label>Email</Label>
 
                 <InputWrap>
                   <FiMail />
 
                   <input
-                      id="email"
-                      type="email"
                       value={email}
+                      type="email"
+                      placeholder="email@example.com"
                       onChange={(event) => setEmail(event.target.value)}
                   />
                 </InputWrap>
@@ -291,7 +307,11 @@ export function ProfilePage() {
 
               {profileMessage && (
                   <StatusMessage $status={profileStatus}>
-                    {profileStatus === 'success' ? <FiCheckCircle /> : <FiAlertCircle />}
+                    {profileStatus === 'success' ? (
+                        <FiCheckCircle />
+                    ) : (
+                        <FiAlertCircle />
+                    )}
                     {profileMessage}
                   </StatusMessage>
               )}
@@ -315,30 +335,30 @@ export function ProfilePage() {
 
             <Form onSubmit={handlePasswordSubmit}>
               <Field>
-                <Label htmlFor="current-password">Текущий пароль</Label>
+                <Label>Текущий пароль</Label>
 
                 <InputWrap>
                   <FiLock />
 
                   <input
-                      id="current-password"
-                      type="password"
                       value={currentPassword}
+                      type="password"
+                      placeholder="Введите текущий пароль"
                       onChange={(event) => setCurrentPassword(event.target.value)}
                   />
                 </InputWrap>
               </Field>
 
               <Field>
-                <Label htmlFor="new-password">Новый пароль</Label>
+                <Label>Новый пароль</Label>
 
                 <InputWrap>
                   <FiLock />
 
                   <input
-                      id="new-password"
-                      type="password"
                       value={newPassword}
+                      type="password"
+                      minLength={6}
                       placeholder="Минимум 6 символов"
                       onChange={(event) => setNewPassword(event.target.value)}
                   />
@@ -347,7 +367,11 @@ export function ProfilePage() {
 
               {passwordMessage && (
                   <StatusMessage $status={passwordStatus}>
-                    {passwordStatus === 'success' ? <FiCheckCircle /> : <FiAlertCircle />}
+                    {passwordStatus === 'success' ? (
+                        <FiCheckCircle />
+                    ) : (
+                        <FiAlertCircle />
+                    )}
                     {passwordMessage}
                   </StatusMessage>
               )}
@@ -361,7 +385,7 @@ export function ProfilePage() {
 
           <Card>
             <CardHeader>
-              <FiUploadCloud />
+              <FiCamera />
 
               <div>
                 <h2>Аватар</h2>
@@ -369,9 +393,15 @@ export function ProfilePage() {
               </div>
             </CardHeader>
 
-            <AvatarUploadBox type="button" onClick={handleAvatarClick}>
+            <AvatarUploadBox
+                type="button"
+                disabled={isUploadingAvatar}
+                onClick={handleAvatarClick}
+            >
               <FiUploadCloud />
+
               <strong>{isUploadingAvatar ? 'Загружаем...' : 'Выбрать файл'}</strong>
+
               <span>JPG, PNG или WEBP до 8 MB.</span>
             </AvatarUploadBox>
           </Card>
@@ -398,34 +428,47 @@ const Page = styled.div`
   gap: 18px;
 `;
 
-const Hero = styled.section`
-  padding: 22px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: ${({ theme }) => theme.radius.lg};
-  background:
-    radial-gradient(circle at top left, rgba(124, 58, 237, 0.24), transparent 34%),
-    radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.16), transparent 34%),
-    rgba(21, 25, 43, 0.86);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+const Grid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 18px;
 
+  > article:first-child {
+    grid-column: 1 / -1;
+  }
+
+  > article:last-child {
+    grid-column: 1 / -1;
+  }
+
   @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
-    align-items: flex-start;
-    flex-direction: column;
+    grid-template-columns: 1fr;
   }
 `;
 
-const ProfileHead = styled.div`
+const AccountCard = styled.article`
   min-width: 0;
-  display: flex;
-  align-items: center;
+  padding: 18px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background:
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.18), transparent 34%),
+    rgba(21, 25, 43, 0.84);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 18px;
+  align-items: center;
+
+  ${/* sc-selector */ ''} > div:last-child {
+    grid-column: 1 / -1;
+  }
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
 
   @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-    align-items: flex-start;
-    flex-direction: column;
+    grid-template-columns: 1fr;
   }
 `;
 
@@ -453,6 +496,11 @@ const AvatarButton = styled.button`
   &:hover div {
     opacity: 1;
   }
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    width: 96px;
+    height: 96px;
+  }
 `;
 
 const AvatarOverlay = styled.div`
@@ -465,35 +513,36 @@ const AvatarOverlay = styled.div`
   transition: 0.2s ease;
 `;
 
-const HeroText = styled.div`
+const HiddenFileInput = styled.input`
+  display: none;
+`;
+
+const AccountInfo = styled.div`
   min-width: 0;
+  display: grid;
+  gap: 8px;
 `;
 
-const Eyebrow = styled.div`
-  margin-bottom: 8px;
-  color: ${({ theme }) => theme.colors.primaryHover};
-  font-size: 13px;
-  font-weight: 900;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-`;
-
-const Title = styled.h1`
+const Nickname = styled.h2`
   margin: 0;
-  font-size: clamp(30px, 5vw, 52px);
-  line-height: 0.96;
-  letter-spacing: -0.075em;
+  font-size: clamp(28px, 4vw, 42px);
+  line-height: 1;
+  letter-spacing: -0.07em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 `;
 
-const Subtitle = styled.p`
-  max-width: 720px;
-  margin: 12px 0 0;
+const Email = styled.div`
   color: ${({ theme }) => theme.colors.textMuted};
-  line-height: 1.65;
+  font-size: 14px;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 `;
 
 const Badges = styled.div`
-  margin-top: 14px;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -517,11 +566,17 @@ const Badge = styled.div`
   }
 `;
 
-const HeroActions = styled.div`
+const AccountActions = styled.div`
   flex: 0 0 auto;
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 9px;
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
 `;
 
 const RefreshButton = styled.button`
@@ -553,20 +608,6 @@ const LogoutButton = styled(RefreshButton)`
 
   &:hover:not(:disabled) {
     background: rgba(239, 68, 68, 0.16);
-  }
-`;
-
-const Grid = styled.div`
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
-
-  > article:last-child {
-    grid-column: 1 / -1;
-  }
-
-  @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
-    grid-template-columns: 1fr;
   }
 `;
 
@@ -729,11 +770,16 @@ const AvatarUploadBox = styled.button`
     font-weight: 700;
   }
 
-  &:hover {
+  &:hover:not(:disabled) {
     border-color: rgba(139, 92, 246, 0.72);
     background:
       radial-gradient(circle at top left, rgba(124, 58, 237, 0.22), transparent 34%),
       rgba(255, 255, 255, 0.055);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
 `;
 

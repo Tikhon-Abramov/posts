@@ -1,6 +1,6 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import styled from 'styled-components';
@@ -33,6 +33,7 @@ const POLLING_INTERVAL = 8000;
 export function PremiumFeedPage() {
     const dispatch = useDispatch<AppDispatch>();
     const loadMoreRef = useRef<HTMLDivElement | null>(null);
+    const isFiltersMountedRef = useRef(false);
 
     const { accessToken, user } = useSelector((state: RootState) => state.auth);
 
@@ -58,7 +59,7 @@ export function PremiumFeedPage() {
     } = useGetFeedQuery(
         {
             type: 'premium',
-            cursor,
+            cursor: cursor || undefined,
             limit: FEED_LIMIT,
             search: searchQuery,
             mediaType: mediaFilter,
@@ -66,10 +67,23 @@ export function PremiumFeedPage() {
         },
         {
             skip: !hasPremium,
+            refetchOnMountOrArgChange: true,
         }
     );
 
-    const latestAfter = loadedPosts[0]?.createdAt || null;
+    const dataPosts = useMemo(() => {
+        return data?.items || data?.posts || [];
+    }, [data]);
+
+    const visiblePosts = useMemo(() => {
+        if (loadedPosts.length) {
+            return loadedPosts;
+        }
+
+        return dataPosts;
+    }, [dataPosts, loadedPosts]);
+
+    const latestAfter = visiblePosts[0]?.createdAt || null;
 
     const { data: latestData } = useGetLatestFeedPostsQuery(
         {
@@ -84,8 +98,18 @@ export function PremiumFeedPage() {
         }
     );
 
-    const isFirstLoading = isLoading && loadedPosts.length === 0;
-    const isLoadingMore = isFetching && loadedPosts.length > 0;
+    const isFirstLoading =
+        (isLoading || isFetching) && visiblePosts.length === 0 && !data;
+
+    const isLoadingMore = isFetching && visiblePosts.length > 0;
+
+    useEffect(() => {
+        if (!hasPremium) {
+            return;
+        }
+
+        refetch();
+    }, [hasPremium, refetch]);
 
     useEffect(() => {
         if (!data) {
@@ -119,6 +143,11 @@ export function PremiumFeedPage() {
     }, [latestData]);
 
     useEffect(() => {
+        if (!isFiltersMountedRef.current) {
+            isFiltersMountedRef.current = true;
+            return;
+        }
+
         setCursor(null);
         setLoadedPosts([]);
         setNextCursor(null);
@@ -162,6 +191,13 @@ export function PremiumFeedPage() {
         setSearchQuery('');
         setMediaFilter('ALL');
         setSortMode('RECENT');
+
+        setCursor(null);
+        setLoadedPosts([]);
+        setNextCursor(null);
+        setHasMore(true);
+
+        refetch();
     };
 
     const handleOpenLogin = () => {
@@ -295,7 +331,7 @@ export function PremiumFeedPage() {
         );
     }
 
-    if (isError && !loadedPosts.length) {
+    if (isError && !visiblePosts.length) {
         return (
             <StateCard>
                 <FiAlertCircle />
@@ -368,10 +404,10 @@ export function PremiumFeedPage() {
                 </ResetButton>
             </Toolbar>
 
-            {loadedPosts.length ? (
+            {visiblePosts.length ? (
                 <>
                     <FeedMeta>
-                        <span>Лента обновляется автоматически</span>
+                        <span>Загружено: {visiblePosts.length} • Лента обновляется автоматически</span>
 
                         {isLoadingMore && (
                             <LoadingInline>
@@ -381,7 +417,7 @@ export function PremiumFeedPage() {
                         )}
                     </FeedMeta>
 
-                    <PostGrid posts={loadedPosts} />
+                    <PostGrid posts={visiblePosts} />
 
                     <LoadMoreAnchor ref={loadMoreRef}>
                         {hasMore ? (

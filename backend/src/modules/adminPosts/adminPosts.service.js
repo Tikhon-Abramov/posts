@@ -137,44 +137,44 @@ function mapPostRow(row) {
 
 function buildPostsSelect() {
     return `
-    SELECT
-      p.id,
-      p.title,
-      p.description,
-      p.visibility,
-      p.created_at,
-      u.id AS author_id,
-      u.nickname AS author_nickname,
-      u.avatar_url AS author_avatar_url,
-      pm.id AS media_id,
-      pm.type AS media_type,
-      pm.url AS media_url,
+        SELECT
+            p.id,
+            p.title,
+            p.description,
+            p.visibility,
+            p.created_at,
+            u.id AS author_id,
+            u.nickname AS author_nickname,
+            u.avatar_url AS author_avatar_url,
+            pm.id AS media_id,
+            pm.type AS media_type,
+            pm.url AS media_url,
 
-      (
-        SELECT COUNT(*)
-        FROM post_reactions pr_like
-        WHERE pr_like.post_id = p.id
-          AND pr_like.type = 'LIKE'
-      ) AS likes_count,
+            (
+                SELECT COUNT(*)
+                FROM post_reactions pr_like
+                WHERE pr_like.post_id = p.id
+                  AND pr_like.type = 'LIKE'
+            ) AS likes_count,
 
-      (
-        SELECT COUNT(*)
-        FROM post_reactions pr_dislike
-        WHERE pr_dislike.post_id = p.id
-          AND pr_dislike.type = 'DISLIKE'
-      ) AS dislikes_count,
+            (
+                SELECT COUNT(*)
+                FROM post_reactions pr_dislike
+                WHERE pr_dislike.post_id = p.id
+                  AND pr_dislike.type = 'DISLIKE'
+            ) AS dislikes_count,
 
-      (
-        SELECT COUNT(*)
-        FROM comments c
-        WHERE c.post_id = p.id
-          AND c.deleted_at IS NULL
-      ) AS comments_count
+            (
+                SELECT COUNT(*)
+                FROM comments c
+                WHERE c.post_id = p.id
+                  AND c.deleted_at IS NULL
+            ) AS comments_count
 
-    FROM posts p
-    INNER JOIN users u ON u.id = p.author_id
-    LEFT JOIN post_media pm ON pm.post_id = p.id
-  `;
+        FROM posts p
+                 INNER JOIN users u ON u.id = p.author_id
+                 LEFT JOIN post_media pm ON pm.post_id = p.id
+    `;
 }
 
 function buildSearchCondition({ search, params }) {
@@ -221,7 +221,7 @@ function buildMediaCondition({ mediaType, params }) {
 }
 
 function buildCursorCondition({ cursor, params }) {
-    if (!cursor) {
+    if (!cursor || cursor === 'null' || cursor === 'undefined') {
         return '';
     }
 
@@ -255,11 +255,10 @@ function getOrderBy(sort) {
 
 async function getPosts({ query }) {
     const limit = parseLimit(query.limit);
+    const sqlLimit = limit + 1;
     const sort = normalizeSort(query.sort);
 
-    const params = {
-        limit: limit + 1,
-    };
+    const params = {};
 
     const searchCondition = buildSearchCondition({
         search: query.search,
@@ -290,7 +289,7 @@ async function getPosts({ query }) {
         ${mediaCondition}
         ${cursorCondition}
       ${getOrderBy(sort)}
-      LIMIT :limit
+      LIMIT ${sqlLimit}
     `,
         params
     );
@@ -301,16 +300,16 @@ async function getPosts({ query }) {
 async function getPostsStats() {
     const [rows] = await pool.execute(
         `
-      SELECT
-        COUNT(*) AS total,
-        SUM(CASE WHEN p.visibility = 'PUBLIC' THEN 1 ELSE 0 END) AS public_posts,
-        SUM(CASE WHEN p.visibility = 'PREMIUM' THEN 1 ELSE 0 END) AS premium_posts,
-        SUM(CASE WHEN pm.type = 'IMAGE' THEN 1 ELSE 0 END) AS images_count,
-        SUM(CASE WHEN pm.type = 'VIDEO' THEN 1 ELSE 0 END) AS videos_count
-      FROM posts p
-      LEFT JOIN post_media pm ON pm.post_id = p.id
-      WHERE p.deleted_at IS NULL
-    `
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN p.visibility = 'PUBLIC' THEN 1 ELSE 0 END) AS public_posts,
+                SUM(CASE WHEN p.visibility = 'PREMIUM' THEN 1 ELSE 0 END) AS premium_posts,
+                SUM(CASE WHEN pm.type = 'IMAGE' THEN 1 ELSE 0 END) AS images_count,
+                SUM(CASE WHEN pm.type = 'VIDEO' THEN 1 ELSE 0 END) AS videos_count
+            FROM posts p
+                     LEFT JOIN post_media pm ON pm.post_id = p.id
+            WHERE p.deleted_at IS NULL
+        `
     );
 
     const row = rows[0] || {};
@@ -351,19 +350,19 @@ async function createPost({ admin, payload, file }) {
 
         const [postResult] = await connection.execute(
             `
-        INSERT INTO posts (
-          author_id,
-          title,
-          description,
-          visibility
-        )
-        VALUES (
-          :authorId,
-          :title,
-          :description,
-          :visibility
-        )
-      `,
+                INSERT INTO posts (
+                    author_id,
+                    title,
+                    description,
+                    visibility
+                )
+                VALUES (
+                           :authorId,
+                           :title,
+                           :description,
+                           :visibility
+                       )
+            `,
             {
                 authorId: admin.id,
                 title,
@@ -376,17 +375,17 @@ async function createPost({ admin, payload, file }) {
 
         const [mediaResult] = await connection.execute(
             `
-        INSERT INTO post_media (
-          post_id,
-          type,
-          url
-        )
-        VALUES (
-          :postId,
-          :type,
-          :url
-        )
-      `,
+                INSERT INTO post_media (
+                    post_id,
+                    type,
+                    url
+                )
+                VALUES (
+                           :postId,
+                           :type,
+                           :url
+                       )
+            `,
             {
                 postId,
                 type: mediaType,
@@ -439,13 +438,13 @@ async function deletePost({ postId }) {
 
         const [postRows] = await connection.execute(
             `
-        SELECT id
-        FROM posts
-        WHERE id = :postId
-          AND deleted_at IS NULL
-        LIMIT 1
+                SELECT id
+                FROM posts
+                WHERE id = :postId
+                  AND deleted_at IS NULL
+                    LIMIT 1
         FOR UPDATE
-      `,
+            `,
             {
                 postId: normalizedPostId,
             }
@@ -457,10 +456,10 @@ async function deletePost({ postId }) {
 
         const [mediaRows] = await connection.execute(
             `
-        SELECT url
-        FROM post_media
-        WHERE post_id = :postId
-      `,
+                SELECT url
+                FROM post_media
+                WHERE post_id = :postId
+            `,
             {
                 postId: normalizedPostId,
             }
@@ -468,9 +467,9 @@ async function deletePost({ postId }) {
 
         await connection.execute(
             `
-        DELETE FROM notifications
-        WHERE post_id = :postId
-      `,
+                DELETE FROM notifications
+                WHERE post_id = :postId
+            `,
             {
                 postId: normalizedPostId,
             }
@@ -478,10 +477,10 @@ async function deletePost({ postId }) {
 
         await connection.execute(
             `
-        DELETE FROM posts
-        WHERE id = :postId
-        LIMIT 1
-      `,
+                DELETE FROM posts
+                WHERE id = :postId
+                    LIMIT 1
+            `,
             {
                 postId: normalizedPostId,
             }
