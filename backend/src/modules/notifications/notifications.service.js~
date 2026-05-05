@@ -63,7 +63,7 @@ function mapNotificationRow(row) {
 }
 
 function buildCursorCondition({ cursor, params }) {
-    if (!cursor || cursor === 'null' || cursor === 'undefined') {
+    if (!cursor) {
         return '';
     }
 
@@ -79,7 +79,7 @@ function buildCursorCondition({ cursor, params }) {
 }
 
 function buildAfterCondition({ after, params }) {
-    if (!after || after === 'null' || after === 'undefined') {
+    if (!after) {
         return '';
     }
 
@@ -112,10 +112,10 @@ function buildFilterCondition({ filter, params }) {
 
 async function getNotifications({ userId, query }) {
     const limit = parseLimit(query.limit);
-    const sqlLimit = limit + 1;
 
     const params = {
         userId,
+        limit: limit + 1,
     };
 
     const filterCondition = buildFilterCondition({
@@ -144,7 +144,7 @@ async function getNotifications({ userId, query }) {
         ${filterCondition}
         ${cursorCondition}
       ORDER BY created_at DESC, id DESC
-      LIMIT ${sqlLimit}
+      LIMIT :limit
     `,
         params
     );
@@ -155,16 +155,16 @@ async function getNotifications({ userId, query }) {
 async function getNotificationsStats(userId) {
     const [rows] = await pool.execute(
         `
-            SELECT
-                COUNT(*) AS total,
-                SUM(CASE WHEN is_read = FALSE THEN 1 ELSE 0 END) AS unread,
-                SUM(CASE WHEN type = 'REQUEST_APPROVED' THEN 1 ELSE 0 END) AS approved,
-                SUM(CASE WHEN type = 'REQUEST_REJECTED' THEN 1 ELSE 0 END) AS rejected,
-                SUM(CASE WHEN type = 'NEW_LIKE' THEN 1 ELSE 0 END) AS likes,
-                SUM(CASE WHEN type = 'NEW_COMMENT' THEN 1 ELSE 0 END) AS comments
-            FROM notifications
-            WHERE user_id = :userId
-        `,
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN is_read = FALSE THEN 1 ELSE 0 END) AS unread,
+        SUM(CASE WHEN type = 'REQUEST_APPROVED' THEN 1 ELSE 0 END) AS approved,
+        SUM(CASE WHEN type = 'REQUEST_REJECTED' THEN 1 ELSE 0 END) AS rejected,
+        SUM(CASE WHEN type = 'NEW_LIKE' THEN 1 ELSE 0 END) AS likes,
+        SUM(CASE WHEN type = 'NEW_COMMENT' THEN 1 ELSE 0 END) AS comments
+      FROM notifications
+      WHERE user_id = :userId
+    `,
         {
             userId,
         }
@@ -186,10 +186,9 @@ async function getNotificationsStats(userId) {
 }
 
 async function getLatestNotifications({ userId, query }) {
-    const sqlLimit = 20;
-
     const params = {
         userId,
+        limit: 20,
     };
 
     const afterCondition = buildAfterCondition({
@@ -212,7 +211,7 @@ async function getLatestNotifications({ userId, query }) {
       WHERE user_id = :userId
         ${afterCondition}
       ORDER BY created_at DESC, id DESC
-      LIMIT ${sqlLimit}
+      LIMIT :limit
     `,
         params
     );
@@ -230,11 +229,11 @@ async function getLatestNotifications({ userId, query }) {
 async function markAllAsRead(userId) {
     await pool.execute(
         `
-            UPDATE notifications
-            SET is_read = TRUE
-            WHERE user_id = :userId
-              AND is_read = FALSE
-        `,
+      UPDATE notifications
+      SET is_read = TRUE
+      WHERE user_id = :userId
+        AND is_read = FALSE
+    `,
         {
             userId,
         }
@@ -250,11 +249,11 @@ async function deleteNotification({ userId, notificationId }) {
 
     const [result] = await pool.execute(
         `
-            DELETE FROM notifications
-            WHERE id = :notificationId
-              AND user_id = :userId
-                LIMIT 1
-        `,
+      DELETE FROM notifications
+      WHERE id = :notificationId
+        AND user_id = :userId
+      LIMIT 1
+    `,
         {
             notificationId: normalizedNotificationId,
             userId,
@@ -273,9 +272,9 @@ async function deleteNotification({ userId, notificationId }) {
 async function clearNotifications(userId) {
     await pool.execute(
         `
-            DELETE FROM notifications
-            WHERE user_id = :userId
-        `,
+      DELETE FROM notifications
+      WHERE user_id = :userId
+    `,
         {
             userId,
         }

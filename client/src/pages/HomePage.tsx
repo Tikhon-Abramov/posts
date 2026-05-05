@@ -25,6 +25,7 @@ const POLLING_INTERVAL = 8000;
 
 export function HomePage() {
     const loadMoreRef = useRef<HTMLDivElement | null>(null);
+    const isFiltersMountedRef = useRef(false);
 
     const [searchQuery, setSearchQuery] = useState('');
     const [mediaFilter, setMediaFilter] = useState<MediaFilter>('ALL');
@@ -41,16 +42,33 @@ export function HomePage() {
         isFetching,
         isError,
         refetch,
-    } = useGetFeedQuery({
-        type: 'public',
-        cursor,
-        limit: FEED_LIMIT,
-        search: searchQuery,
-        mediaType: mediaFilter,
-        sort: sortMode,
-    });
+    } = useGetFeedQuery(
+        {
+            type: 'public',
+            cursor: cursor || undefined,
+            limit: FEED_LIMIT,
+            search: searchQuery,
+            mediaType: mediaFilter,
+            sort: sortMode,
+        },
+        {
+            refetchOnMountOrArgChange: true,
+        }
+    );
 
-    const latestAfter = loadedPosts[0]?.createdAt || null;
+    const dataPosts = useMemo(() => {
+        return data?.items || data?.posts || [];
+    }, [data]);
+
+    const visiblePosts = useMemo(() => {
+        if (loadedPosts.length) {
+            return loadedPosts;
+        }
+
+        return dataPosts;
+    }, [dataPosts, loadedPosts]);
+
+    const latestAfter = visiblePosts[0]?.createdAt || null;
 
     const { data: latestData } = useGetLatestFeedPostsQuery(
         {
@@ -65,8 +83,14 @@ export function HomePage() {
         }
     );
 
-    const isFirstLoading = isLoading && loadedPosts.length === 0;
-    const isLoadingMore = isFetching && loadedPosts.length > 0;
+    const isFirstLoading =
+        (isLoading || isFetching) && visiblePosts.length === 0 && !data;
+
+    const isLoadingMore = isFetching && visiblePosts.length > 0;
+
+    useEffect(() => {
+        refetch();
+    }, [refetch]);
 
     useEffect(() => {
         if (!data) {
@@ -100,6 +124,11 @@ export function HomePage() {
     }, [latestData]);
 
     useEffect(() => {
+        if (!isFiltersMountedRef.current) {
+            isFiltersMountedRef.current = true;
+            return;
+        }
+
         setCursor(null);
         setLoadedPosts([]);
         setNextCursor(null);
@@ -140,25 +169,32 @@ export function HomePage() {
     }, [hasMore, isFetching, nextCursor]);
 
     const statsText = useMemo(() => {
-        if (!loadedPosts.length) {
+        if (!visiblePosts.length) {
             return 'Пока публикаций нет';
         }
 
-        const imageCount = loadedPosts.filter(
+        const imageCount = visiblePosts.filter(
             (post) => post.media[0]?.type === 'IMAGE'
         ).length;
 
-        const videoCount = loadedPosts.filter(
+        const videoCount = visiblePosts.filter(
             (post) => post.media[0]?.type === 'VIDEO'
         ).length;
 
-        return `Загружено: ${loadedPosts.length} • Фото: ${imageCount} • Видео: ${videoCount}`;
-    }, [loadedPosts]);
+        return `Загружено: ${visiblePosts.length} • Фото: ${imageCount} • Видео: ${videoCount}`;
+    }, [visiblePosts]);
 
     const resetFilters = () => {
         setSearchQuery('');
         setMediaFilter('ALL');
         setSortMode('RECENT');
+
+        setCursor(null);
+        setLoadedPosts([]);
+        setNextCursor(null);
+        setHasMore(true);
+
+        refetch();
     };
 
     if (isFirstLoading) {
@@ -173,7 +209,7 @@ export function HomePage() {
         );
     }
 
-    if (isError && !loadedPosts.length) {
+    if (isError && !visiblePosts.length) {
         return (
             <StateCard>
                 <FiAlertCircle />
@@ -245,7 +281,7 @@ export function HomePage() {
                 </ResetButton>
             </Toolbar>
 
-            {loadedPosts.length ? (
+            {visiblePosts.length ? (
                 <>
                     <FeedMeta>
                         <span>{statsText}</span>
@@ -258,7 +294,7 @@ export function HomePage() {
                         )}
                     </FeedMeta>
 
-                    <PostGrid posts={loadedPosts} />
+                    <PostGrid posts={visiblePosts} />
 
                     <LoadMoreAnchor ref={loadMoreRef}>
                         {hasMore ? (

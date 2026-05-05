@@ -22,8 +22,6 @@ import { logout, openAuthModal } from '../../entities/auth/slice/authSlice';
 import { useGetNotificationsStatsQuery } from '../../entities/notification/api/notificationApi';
 import { getMediaUrl } from '../../shared/lib/getMediaUrl';
 
-const NOTIFICATIONS_STATS_POLLING_INTERVAL = 5000;
-
 interface NavigationItem {
     to: string;
     label: string;
@@ -44,10 +42,6 @@ export function Sidebar() {
 
     const { data: notificationsStats } = useGetNotificationsStatsQuery(undefined, {
         skip: !isAuth,
-        pollingInterval: NOTIFICATIONS_STATS_POLLING_INTERVAL,
-        refetchOnMountOrArgChange: true,
-        refetchOnFocus: true,
-        refetchOnReconnect: true,
     });
 
     const unreadNotificationsCount = notificationsStats?.unread || 0;

@@ -1,18 +1,19 @@
-/* eslint-disable react-hooks/set-state-in-effect */
-
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import styled from 'styled-components';
 import {
     FiAlertCircle,
+    FiBookmark,
     FiFilter,
-    FiGlobe,
+    FiImage,
     FiLoader,
+    FiRefreshCw,
     FiSearch,
+    FiVideo,
 } from 'react-icons/fi';
 
 import {
-    useGetFeedQuery,
-    useGetLatestFeedPostsQuery,
+    useGetSavedPostsQuery,
+    useGetSavedPostsStatsQuery,
 } from '../entities/post/api/postApi';
 import type { MediaType, Post } from '../entities/post/model/postTypes';
 import { PostGrid } from '../entities/post/ui/PostGrid';
@@ -21,11 +22,9 @@ type MediaFilter = 'ALL' | MediaType;
 type SortMode = 'RECENT' | 'POPULAR';
 
 const FEED_LIMIT = 10;
-const POLLING_INTERVAL = 8000;
 
-export function HomePage() {
+export function SavedPostsPage() {
     const loadMoreRef = useRef<HTMLDivElement | null>(null);
-    const isFiltersMountedRef = useRef(false);
 
     const [searchQuery, setSearchQuery] = useState('');
     const [mediaFilter, setMediaFilter] = useState<MediaFilter>('ALL');
@@ -42,29 +41,19 @@ export function HomePage() {
         isFetching,
         isError,
         refetch,
-    } = useGetFeedQuery({
-        type: 'public',
-        cursor: cursor || undefined,
+    } = useGetSavedPostsQuery({
+        cursor,
         limit: FEED_LIMIT,
         search: searchQuery,
         mediaType: mediaFilter,
         sort: sortMode,
     });
 
-    const latestAfter = loadedPosts[0]?.createdAt || null;
-
-    const { data: latestData } = useGetLatestFeedPostsQuery(
-        {
-            type: 'public',
-            after: latestAfter,
-            search: searchQuery,
-            mediaType: mediaFilter,
-        },
-        {
-            skip: !latestAfter || sortMode !== 'RECENT',
-            pollingInterval: POLLING_INTERVAL,
-        }
-    );
+    const {
+        data: stats,
+        isLoading: isStatsLoading,
+        refetch: refetchStats,
+    } = useGetSavedPostsStatsQuery();
 
     const isFirstLoading = isLoading && loadedPosts.length === 0;
     const isLoadingMore = isFetching && loadedPosts.length > 0;
@@ -78,10 +67,10 @@ export function HomePage() {
 
         setLoadedPosts((currentPosts) => {
             if (!cursor) {
-                return mergePostsKeepingFirstPriority(items, currentPosts);
+                return items;
             }
 
-            return mergePostsKeepingFirstPriority(currentPosts, items);
+            return mergePostsKeepingOrder(currentPosts, items);
         });
 
         setNextCursor(data.nextCursor);
@@ -89,23 +78,6 @@ export function HomePage() {
     }, [cursor, data]);
 
     useEffect(() => {
-        const latestItems = latestData?.items || [];
-
-        if (!latestItems.length) {
-            return;
-        }
-
-        setLoadedPosts((currentPosts) =>
-            mergePostsKeepingFirstPriority(latestItems, currentPosts)
-        );
-    }, [latestData]);
-
-    useEffect(() => {
-        if (!isFiltersMountedRef.current) {
-            isFiltersMountedRef.current = true;
-            return;
-        }
-
         setCursor(null);
         setLoadedPosts([]);
         setNextCursor(null);
@@ -145,43 +117,27 @@ export function HomePage() {
         };
     }, [hasMore, isFetching, nextCursor]);
 
-    const statsText = useMemo(() => {
-        if (!loadedPosts.length) {
-            return 'Пока публикаций нет';
-        }
-
-        const imageCount = loadedPosts.filter(
-            (post) => post.media[0]?.type === 'IMAGE'
-        ).length;
-
-        const videoCount = loadedPosts.filter(
-            (post) => post.media[0]?.type === 'VIDEO'
-        ).length;
-
-        return `Загружено: ${loadedPosts.length} • Фото: ${imageCount} • Видео: ${videoCount}`;
-    }, [loadedPosts]);
-
     const resetFilters = () => {
         setSearchQuery('');
         setMediaFilter('ALL');
         setSortMode('RECENT');
+    };
 
+    const handleRefetch = () => {
         setCursor(null);
         setLoadedPosts([]);
         setNextCursor(null);
         setHasMore(true);
-
         refetch();
+        refetchStats();
     };
 
     if (isFirstLoading) {
         return (
             <StateCard>
-                <FiLoader />
-
-                <h1>Загружаем ленту</h1>
-
-                <p>Сейчас покажем свежие публичные фото и видео.</p>
+                <FiBookmark />
+                <h1>Загружаем сохраненные</h1>
+                <p>Сейчас покажем публикации, которые вы сохранили в профиль.</p>
             </StateCard>
         );
     }
@@ -190,12 +146,11 @@ export function HomePage() {
         return (
             <StateCard>
                 <FiAlertCircle />
+                <h1>Не удалось загрузить сохраненные</h1>
+                <p>Попробуйте обновить список сохраненных публикаций.</p>
 
-                <h1>Не удалось загрузить ленту</h1>
-
-                <p>Проверьте подключение или попробуйте повторить загрузку.</p>
-
-                <PrimaryButton type="button" onClick={() => refetch()}>
+                <PrimaryButton type="button" onClick={handleRefetch}>
+                    <FiRefreshCw />
                     Повторить
                 </PrimaryButton>
             </StateCard>
@@ -206,29 +161,56 @@ export function HomePage() {
         <Page>
             <Hero>
                 <HeroContent>
-                    <Eyebrow>Обычная лента</Eyebrow>
+                    <Eyebrow>Личный раздел</Eyebrow>
 
-                    <Title>Свежие фото и видео</Title>
+                    <Title>Сохраненные посты</Title>
 
                     <Subtitle>
-                        Публичные посты доступны всем пользователям. Лента подгружается
-                        частями при прокрутке и автоматически проверяет новые публикации.
+                        Здесь находятся публикации, которые вы сохранили. Другие пользователи
+                        не видят, что именно вы добавили в сохраненные.
                     </Subtitle>
                 </HeroContent>
 
                 <HeroBadge>
-                    <FiGlobe />
-                    Public
+                    <FiBookmark />
+                    Private
                 </HeroBadge>
             </Hero>
+
+            <StatsGrid>
+                <StatCard>
+                    <FiBookmark />
+                    <div>
+                        <strong>{isStatsLoading ? '...' : stats?.total || 0}</strong>
+                        <span>Всего сохранено</span>
+                    </div>
+                </StatCard>
+
+                <StatCard>
+                    <FiImage />
+                    <div>
+                        <strong>{isStatsLoading ? '...' : stats?.imagesCount || 0}</strong>
+                        <span>Фото</span>
+                    </div>
+                </StatCard>
+
+                <StatCard>
+                    <FiVideo />
+                    <div>
+                        <strong>{isStatsLoading ? '...' : stats?.videosCount || 0}</strong>
+                        <span>Видео</span>
+                    </div>
+                </StatCard>
+            </StatsGrid>
 
             <Toolbar>
                 <SearchBox>
                     <FiSearch />
 
                     <input
+                        type="text"
                         value={searchQuery}
-                        placeholder="Поиск по названию, описанию, автору или ID..."
+                        placeholder="Поиск по сохраненным: название, описание, автор..."
                         onChange={(event) => setSearchQuery(event.target.value)}
                     />
                 </SearchBox>
@@ -252,16 +234,23 @@ export function HomePage() {
                     </FilterSelect>
                 </Filters>
 
-                <ResetButton type="button" onClick={resetFilters}>
-                    <FiFilter />
-                    Сбросить
-                </ResetButton>
+                <ToolbarActions>
+                    <ResetButton type="button" onClick={resetFilters}>
+                        <FiFilter />
+                        Сбросить
+                    </ResetButton>
+
+                    <RefreshButton type="button" disabled={isFetching} onClick={handleRefetch}>
+                        <FiRefreshCw />
+                        Обновить
+                    </RefreshButton>
+                </ToolbarActions>
             </Toolbar>
 
             {loadedPosts.length ? (
                 <>
                     <FeedMeta>
-                        <span>{statsText}</span>
+                        <span>Загружено на странице: {loadedPosts.length}</span>
 
                         {isLoadingMore && (
                             <LoadingInline>
@@ -277,20 +266,20 @@ export function HomePage() {
                         {hasMore ? (
                             <LoadingMore>
                                 <FiLoader />
-                                <span>Листайте ниже — посты подгрузятся автоматически</span>
+                                <span>Листайте ниже — сохраненные посты подгрузятся автоматически</span>
                             </LoadingMore>
                         ) : (
                             <EndMessage>
-                                Вы посмотрели все посты по текущим фильтрам
+                                Вы посмотрели все сохраненные посты по текущим фильтрам
                             </EndMessage>
                         )}
                     </LoadMoreAnchor>
                 </>
             ) : (
                 <EmptyCard>
-                    <FiAlertCircle />
+                    <FiSearch />
 
-                    <h2>Постов не найдено</h2>
+                    <h2>Сохраненных постов не найдено</h2>
 
                     <p>
                         Попробуйте изменить поисковую фразу, выбрать другой тип медиа или
@@ -306,20 +295,14 @@ export function HomePage() {
     );
 }
 
-function mergePostsKeepingFirstPriority(first: Post[], second: Post[]) {
-    const result: Post[] = [];
-    const seen = new Set<number>();
+function mergePostsKeepingOrder(first: Post[], second: Post[]) {
+    const map = new Map<number, Post>();
 
     [...first, ...second].forEach((post) => {
-        if (seen.has(post.id)) {
-            return;
-        }
-
-        seen.add(post.id);
-        result.push(post);
+        map.set(post.id, post);
     });
 
-    return result;
+    return Array.from(map.values());
 }
 
 const Page = styled.div`
@@ -377,14 +360,61 @@ const HeroBadge = styled.div`
     flex: 0 0 auto;
     min-height: 42px;
     padding: 0 14px;
-    border: 1px solid rgba(37, 99, 235, 0.36);
+    border: 1px solid rgba(124, 58, 237, 0.36);
     border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(37, 99, 235, 0.12);
-    color: #bfdbfe;
+    background: rgba(124, 58, 237, 0.12);
+    color: #ddd6fe;
     display: inline-flex;
     align-items: center;
     gap: 8px;
     font-weight: 900;
+`;
+
+const StatsGrid = styled.div`
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        grid-template-columns: 1fr;
+    }
+`;
+
+const StatCard = styled.article`
+    padding: 16px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: ${({ theme }) => theme.radius.lg};
+    background: rgba(21, 25, 43, 0.78);
+    display: flex;
+    align-items: center;
+    gap: 13px;
+
+    > svg {
+        width: 46px;
+        height: 46px;
+        padding: 12px;
+        border-radius: 17px;
+        background: rgba(124, 58, 237, 0.14);
+        color: ${({ theme }) => theme.colors.primaryHover};
+    }
+
+    div {
+        min-width: 0;
+        display: grid;
+        gap: 2px;
+    }
+
+    strong {
+        font-size: 28px;
+        line-height: 1;
+        letter-spacing: -0.05em;
+    }
+
+    span {
+        color: ${({ theme }) => theme.colors.textMuted};
+        font-size: 13px;
+        font-weight: 800;
+    }
 `;
 
 const Toolbar = styled.div`
@@ -464,6 +494,41 @@ const FilterSelect = styled.select`
 
     &:focus {
         border-color: rgba(139, 92, 246, 0.72);
+    }
+`;
+
+const ToolbarActions = styled.div`
+    display: flex;
+    gap: 8px;
+
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        display: grid;
+        grid-template-columns: 1fr;
+    }
+`;
+
+const RefreshButton = styled.button`
+    flex: 0 0 auto;
+    min-height: 46px;
+    padding: 0 16px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: rgba(255, 255, 255, 0.055);
+    color: ${({ theme }) => theme.colors.text};
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    font-weight: 900;
+
+    &:hover:not(:disabled) {
+        background: rgba(255, 255, 255, 0.09);
+        border-color: rgba(139, 92, 246, 0.45);
+    }
+
+    &:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
     }
 `;
 
@@ -550,109 +615,109 @@ const LoadingMore = styled.div`
 `;
 
 const EndMessage = styled.div`
-    color: ${({ theme }) => theme.colors.textMuted};
-    font-size: 13px;
-    font-weight: 800;
+  color: ${({ theme }) => theme.colors.textMuted};
+  font-size: 13px;
+  font-weight: 800;
 `;
 
 const EmptyCard = styled.section`
-    min-height: 440px;
-    padding: 30px 22px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.lg};
-    background:
-            radial-gradient(circle at top left, rgba(124, 58, 237, 0.2), transparent 34%),
-            rgba(21, 25, 43, 0.86);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
+  min-height: 440px;
+  padding: 30px 22px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background:
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.2), transparent 34%),
+    rgba(21, 25, 43, 0.86);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
 
-    > svg {
-        margin-bottom: 16px;
-        color: ${({ theme }) => theme.colors.primaryHover};
-        font-size: 44px;
-    }
+  > svg {
+    margin-bottom: 16px;
+    color: ${({ theme }) => theme.colors.primaryHover};
+    font-size: 44px;
+  }
 
-    h2 {
-        margin: 0 0 10px;
-        font-size: clamp(26px, 4vw, 40px);
-        letter-spacing: -0.06em;
-    }
+  h2 {
+    margin: 0 0 10px;
+    font-size: clamp(26px, 4vw, 40px);
+    letter-spacing: -0.06em;
+  }
 
-    p {
-        max-width: 520px;
-        margin: 0;
-        color: ${({ theme }) => theme.colors.textMuted};
-        line-height: 1.6;
-    }
+  p {
+    max-width: 520px;
+    margin: 0;
+    color: ${({ theme }) => theme.colors.textMuted};
+    line-height: 1.6;
+  }
 `;
 
 const EmptyButton = styled.button`
-    min-height: 46px;
-    margin-top: 22px;
-    padding: 0 16px;
-    border: none;
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: linear-gradient(135deg, #7c3aed, #2563eb);
-    color: white;
-    font-weight: 900;
+  min-height: 46px;
+  margin-top: 22px;
+  padding: 0 16px;
+  border: none;
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  color: white;
+  font-weight: 900;
 
-    &:hover {
-        filter: brightness(1.08);
-    }
+  &:hover {
+    filter: brightness(1.08);
+  }
 `;
 
 const PrimaryButton = styled.button`
-    min-height: 48px;
-    margin-top: 22px;
-    padding: 0 18px;
-    border: none;
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: linear-gradient(135deg, #7c3aed, #2563eb);
-    color: white;
-    display: inline-flex;
-    align-items: center;
-    gap: 9px;
-    font-weight: 900;
-    box-shadow: 0 18px 44px rgba(124, 58, 237, 0.22);
+  min-height: 48px;
+  margin-top: 22px;
+  padding: 0 18px;
+  border: none;
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  color: white;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 900;
+  box-shadow: 0 18px 44px rgba(124, 58, 237, 0.22);
 
-    &:hover {
-        filter: brightness(1.08);
-    }
+  &:hover {
+    filter: brightness(1.08);
+  }
 `;
 
 const StateCard = styled.section`
-    min-height: 420px;
-    padding: 30px 22px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.lg};
-    background:
-            radial-gradient(circle at top left, rgba(124, 58, 237, 0.2), transparent 34%),
-            rgba(21, 25, 43, 0.86);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
+  min-height: 420px;
+  padding: 30px 22px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background:
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.2), transparent 34%),
+    rgba(21, 25, 43, 0.86);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
 
-    > svg {
-        margin-bottom: 16px;
-        color: ${({ theme }) => theme.colors.primaryHover};
-        font-size: 44px;
-    }
+  > svg {
+    margin-bottom: 16px;
+    color: ${({ theme }) => theme.colors.primaryHover};
+    font-size: 44px;
+  }
 
-    h1 {
-        margin: 0 0 10px;
-        font-size: clamp(26px, 4vw, 40px);
-        letter-spacing: -0.06em;
-    }
+  h1 {
+    margin: 0 0 10px;
+    font-size: clamp(26px, 4vw, 40px);
+    letter-spacing: -0.06em;
+  }
 
-    p {
-        max-width: 500px;
-        margin: 0;
-        color: ${({ theme }) => theme.colors.textMuted};
-        line-height: 1.6;
-    }
+  p {
+    max-width: 500px;
+    margin: 0;
+    color: ${({ theme }) => theme.colors.textMuted};
+    line-height: 1.6;
+  }
 `;

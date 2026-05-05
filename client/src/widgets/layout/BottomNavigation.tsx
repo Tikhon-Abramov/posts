@@ -20,6 +20,8 @@ import type { RootState } from '../../app/store';
 import { useGetNotificationsStatsQuery } from '../../entities/notification/api/notificationApi';
 import { getMediaUrl } from '../../shared/lib/getMediaUrl';
 
+const NOTIFICATIONS_STATS_POLLING_INTERVAL = 5000;
+
 interface NavigationItem {
     to: string;
     label: string;
@@ -38,6 +40,10 @@ export function BottomNavigation() {
 
     const { data: notificationsStats } = useGetNotificationsStatsQuery(undefined, {
         skip: !isAuth,
+        pollingInterval: NOTIFICATIONS_STATS_POLLING_INTERVAL,
+        refetchOnMountOrArgChange: true,
+        refetchOnFocus: true,
+        refetchOnReconnect: true,
     });
 
     const unreadNotificationsCount = notificationsStats?.unread || 0;
@@ -139,23 +145,23 @@ export function BottomNavigation() {
 }
 
 const Wrapper = styled.nav`
-  position: fixed;
-  left: 10px;
-  right: 10px;
-  bottom: 10px;
-  z-index: 1000;
-  padding: 8px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: 26px;
-  background:
-    radial-gradient(circle at top left, rgba(124, 58, 237, 0.18), transparent 34%),
-    rgba(15, 18, 32, 0.92);
-  backdrop-filter: blur(18px);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
+    position: fixed;
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    z-index: 1000;
+    padding: 8px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: 26px;
+    background:
+            radial-gradient(circle at top left, rgba(124, 58, 237, 0.18), transparent 34%),
+            rgba(15, 18, 32, 0.92);
+    backdrop-filter: blur(18px);
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
 
-  @media (min-width: ${({ theme }) => theme.breakpoints.desktop}) {
-    display: none;
-  }
+    @media (min-width: ${({ theme }) => theme.breakpoints.desktop}) {
+        display: none;
+    }
 `;
 
 const Scroller = styled.div`

@@ -43,20 +43,6 @@ interface LatestNotificationsResponse {
 const USE_MOCK_NOTIFICATIONS =
     import.meta.env.VITE_USE_MOCK_NOTIFICATIONS !== 'false';
 
-function removeEmptyParams<T extends Record<string, unknown>>(params: T) {
-    const result: Record<string, unknown> = {};
-
-    Object.entries(params).forEach(([key, value]) => {
-        if (value === null || value === undefined || value === '') {
-            return;
-        }
-
-        result[key] = value;
-    });
-
-    return result;
-}
-
 export const notificationApi = baseApi.injectEndpoints({
     endpoints: (builder) => ({
         getNotifications: builder.query<NotificationsResponse, NotificationsParams>({
@@ -74,12 +60,12 @@ export const notificationApi = baseApi.injectEndpoints({
                 if (!USE_MOCK_NOTIFICATIONS) {
                     const result = await baseQuery({
                         url: '/notifications',
-                        params: removeEmptyParams({
+                        params: {
                             cursor,
                             page,
                             limit,
                             filter,
-                        }),
+                        },
                     });
 
                     if (result.error) {
@@ -127,14 +113,6 @@ export const notificationApi = baseApi.injectEndpoints({
                     },
                 };
             },
-
-            providesTags: (result) => [
-                { type: 'Notification', id: 'LIST' },
-                ...(result?.items || []).map((notification) => ({
-                    type: 'Notification' as const,
-                    id: notification.id,
-                })),
-            ],
         }),
 
         getNotificationsStats: builder.query<MockNotificationsStats, void>({
@@ -167,8 +145,6 @@ export const notificationApi = baseApi.injectEndpoints({
                     data: getMockNotificationsStats(user.id),
                 };
             },
-
-            providesTags: [{ type: 'Notification', id: 'STATS' }],
         }),
 
         getLatestNotifications: builder.query<
@@ -179,9 +155,9 @@ export const notificationApi = baseApi.injectEndpoints({
                 if (!USE_MOCK_NOTIFICATIONS) {
                     const result = await baseQuery({
                         url: '/notifications/latest',
-                        params: removeEmptyParams({
+                        params: {
                             after,
-                        }),
+                        },
                     });
 
                     if (result.error) {
@@ -225,8 +201,6 @@ export const notificationApi = baseApi.injectEndpoints({
                     },
                 };
             },
-
-            providesTags: [{ type: 'Notification', id: 'LATEST' }],
         }),
 
         markAllNotificationsAsRead: builder.mutation<{ message: string }, void>({
@@ -266,12 +240,6 @@ export const notificationApi = baseApi.injectEndpoints({
                     },
                 };
             },
-
-            invalidatesTags: [
-                { type: 'Notification', id: 'LIST' },
-                { type: 'Notification', id: 'STATS' },
-                { type: 'Notification', id: 'LATEST' },
-            ],
         }),
 
         deleteNotification: builder.mutation<{ message: string }, number>({
@@ -311,13 +279,6 @@ export const notificationApi = baseApi.injectEndpoints({
                     },
                 };
             },
-
-            invalidatesTags: (_result, _error, notificationId) => [
-                { type: 'Notification', id: notificationId },
-                { type: 'Notification', id: 'LIST' },
-                { type: 'Notification', id: 'STATS' },
-                { type: 'Notification', id: 'LATEST' },
-            ],
         }),
 
         clearNotifications: builder.mutation<{ message: string }, void>({
@@ -357,12 +318,6 @@ export const notificationApi = baseApi.injectEndpoints({
                     },
                 };
             },
-
-            invalidatesTags: [
-                { type: 'Notification', id: 'LIST' },
-                { type: 'Notification', id: 'STATS' },
-                { type: 'Notification', id: 'LATEST' },
-            ],
         }),
     }),
 });
