@@ -1,0 +1,116 @@
+import styled from 'styled-components';
+import { FiCheck } from 'react-icons/fi';
+import { Button } from '../shared/ui/Button/Button';
+
+export function SubscriptionPage() {
+  return (
+    <Page>
+      <Hero>
+        <Eyebrow>Premium</Eyebrow>
+        <Title>Оформи подписку</Title>
+        <Subtitle>
+          Получи доступ к закрытой ленте с эксклюзивными фото и видео.
+        </Subtitle>
+      </Hero>
+
+      <Plan>
+        <PlanHeader>
+          <h2>Premium</h2>
+          <Price>499 ₽ / месяц</Price>
+        </PlanHeader>
+
+        <Benefits>
+          <li>
+            <FiCheck /> Закрытая премиум-лента
+          </li>
+          <li>
+            <FiCheck /> Доступ к фото и видео
+          </li>
+          <li>
+            <FiCheck /> Сохранение постов в профиль
+          </li>
+        </Benefits>
+
+        <Button>Купить подписку</Button>
+      </Plan>
+    </Page>
+  );
+}
+
+const Page = styled.div`
+  display: grid;
+  gap: 18px;
+`;
+
+const Hero = styled.section`
+  padding: 22px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background:
+    linear-gradient(135deg, rgba(236, 72, 153, 0.18), rgba(124, 58, 237, 0.18)),
+    rgba(21, 25, 43, 0.82);
+`;
+
+const Eyebrow = styled.div`
+  margin-bottom: 8px;
+  color: #ec4899;
+  font-size: 13px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+`;
+
+const Title = styled.h1`
+  margin: 0;
+  font-size: clamp(28px, 4vw, 42px);
+  letter-spacing: -0.06em;
+`;
+
+const Subtitle = styled.p`
+  max-width: 680px;
+  margin: 10px 0 0;
+  color: ${({ theme }) => theme.colors.textMuted};
+  line-height: 1.6;
+`;
+
+const Plan = styled.section`
+  max-width: 520px;
+  padding: 22px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background: rgba(21, 25, 43, 0.82);
+`;
+
+const PlanHeader = styled.div`
+  margin-bottom: 18px;
+
+  h2 {
+    margin: 0 0 6px;
+    font-size: 24px;
+  }
+`;
+
+const Price = styled.div`
+  color: ${({ theme }) => theme.colors.primaryHover};
+  font-size: 28px;
+  font-weight: 900;
+`;
+
+const Benefits = styled.ul`
+  margin: 0 0 22px;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 12px;
+
+  li {
+    color: ${({ theme }) => theme.colors.textMuted};
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  svg {
+    color: ${({ theme }) => theme.colors.success};
+  }
+`;

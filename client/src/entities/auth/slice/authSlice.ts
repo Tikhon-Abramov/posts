@@ -1,0 +1,81 @@
+import { createSlice } from '@reduxjs/toolkit';
+import type { PayloadAction } from '@reduxjs/toolkit';
+import type { AuthState, AuthUser } from '../model/authTypes';
+
+export type AuthModalMode = 'login' | 'register';
+
+interface OpenAuthModalPayload {
+  mode?: AuthModalMode;
+  reason?: string;
+}
+
+const initialState: AuthState = {
+  user: null,
+  accessToken: localStorage.getItem('accessToken'),
+
+  authModal: {
+    isOpen: false,
+    mode: 'login',
+    reason: null,
+  },
+};
+
+const authSlice = createSlice({
+  name: 'auth',
+  initialState,
+  reducers: {
+    setCredentials: (
+        state,
+        action: PayloadAction<{ user: AuthUser; accessToken: string }>
+    ) => {
+      state.user = action.payload.user;
+      state.accessToken = action.payload.accessToken;
+      state.authModal.isOpen = false;
+      state.authModal.reason = null;
+
+      localStorage.setItem('accessToken', action.payload.accessToken);
+    },
+
+    setUser: (state, action: PayloadAction<AuthUser>) => {
+      state.user = action.payload;
+    },
+
+    logout: (state) => {
+      state.user = null;
+      state.accessToken = null;
+      state.authModal.isOpen = false;
+      state.authModal.reason = null;
+
+      localStorage.removeItem('accessToken');
+    },
+
+    openAuthModal: (
+        state,
+        action: PayloadAction<OpenAuthModalPayload | undefined>
+    ) => {
+      state.authModal.isOpen = true;
+      state.authModal.mode = action.payload?.mode || 'login';
+      state.authModal.reason = action.payload?.reason || null;
+    },
+
+    closeAuthModal: (state) => {
+      state.authModal.isOpen = false;
+      state.authModal.reason = null;
+    },
+
+    switchAuthModalMode: (state, action: PayloadAction<AuthModalMode>) => {
+      state.authModal.mode = action.payload;
+    },
+  },
+});
+
+export const {
+  setCredentials,
+  setUser,
+  logout,
+  openAuthModal,
+  closeAuthModal,
+  switchAuthModalMode,
+} = authSlice.actions;
+
+export default authSlice.reducer;

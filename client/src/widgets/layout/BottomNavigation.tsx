@@ -1,0 +1,284 @@
+import { MouseEvent, useEffect, useMemo, useState } from 'react';
+import { NavLink } from 'react-router-dom';
+import { useDispatch, useSelector } from 'react-redux';
+import styled from 'styled-components';
+import {
+    FiBell,
+    FiBookmark,
+    FiFileText,
+    FiHome,
+    FiPlusCircle,
+    FiStar,
+    FiUser,
+} from 'react-icons/fi';
+
+import type { AppDispatch, RootState } from '../../app/store';
+import { openAuthModal } from '../../entities/auth/slice/authSlice';
+import {
+    getMockNotifications,
+    MOCK_STORAGE_KEYS,
+    type MockNotification,
+} from '../../shared/lib/mockStorage';
+
+export function BottomNavigation() {
+    const dispatch = useDispatch<AppDispatch>();
+
+    const { accessToken, user } = useSelector((state: RootState) => state.auth);
+
+    const [notifications, setNotifications] = useState<MockNotification[]>([]);
+
+    const isAuth = Boolean(accessToken);
+
+    const unreadNotificationsCount = useMemo(() => {
+        if (!user) {
+            return 0;
+        }
+
+        return notifications.filter(
+            (notification) => notification.userId === user.id && !notification.isRead
+        ).length;
+    }, [notifications, user]);
+
+    useEffect(() => {
+        const loadNotifications = () => {
+            setNotifications(getMockNotifications());
+        };
+
+        loadNotifications();
+
+        const intervalId = window.setInterval(loadNotifications, 1200);
+
+        const handleStorageChange = (event: StorageEvent) => {
+            if (event.key === MOCK_STORAGE_KEYS.notifications) {
+                loadNotifications();
+            }
+        };
+
+        window.addEventListener('storage', handleStorageChange);
+
+        return () => {
+            window.clearInterval(intervalId);
+            window.removeEventListener('storage', handleStorageChange);
+        };
+    }, []);
+
+    const handleProtectedClick = (
+        event: MouseEvent<HTMLAnchorElement>,
+        reason: string
+    ) => {
+        if (isAuth) {
+            return;
+        }
+
+        event.preventDefault();
+
+        dispatch(
+            openAuthModal({
+                mode: 'login',
+                reason,
+            })
+        );
+    };
+
+    return (
+        <NavWrapper>
+            <Nav>
+                <Item to="/">
+                    <FiHome />
+                    <span>Лента</span>
+                </Item>
+
+                <Item to="/premium">
+                    <FiStar />
+                    <span>VIP</span>
+                </Item>
+
+                <Item
+                    to="/my-posts"
+                    onClick={(event) =>
+                        handleProtectedClick(
+                            event,
+                            'Чтобы смотреть свои публикации, нужно войти в аккаунт.'
+                        )
+                    }
+                >
+                    <FiFileText />
+                    <span>Мои</span>
+                </Item>
+
+                <Item
+                    to="/notifications"
+                    onClick={(event) =>
+                        handleProtectedClick(
+                            event,
+                            'Чтобы смотреть уведомления, нужно войти в аккаунт.'
+                        )
+                    }
+                >
+                    <IconWithBadge>
+                        <FiBell />
+
+                        {unreadNotificationsCount > 0 && (
+                            <UnreadBadge>
+                                {unreadNotificationsCount > 99 ? '99+' : unreadNotificationsCount}
+                            </UnreadBadge>
+                        )}
+                    </IconWithBadge>
+
+                    <span>Увед.</span>
+                </Item>
+
+                <Item
+                    to="/submit-content"
+                    onClick={(event) =>
+                        handleProtectedClick(
+                            event,
+                            'Чтобы предложить публикацию админу, нужно войти в аккаунт.'
+                        )
+                    }
+                >
+                    <FiPlusCircle />
+                    <span>Заявка</span>
+                </Item>
+
+                <Item
+                    to="/saved"
+                    onClick={(event) =>
+                        handleProtectedClick(
+                            event,
+                            'Чтобы смотреть сохраненные посты, нужно войти в аккаунт.'
+                        )
+                    }
+                >
+                    <FiBookmark />
+                    <span>Сохр.</span>
+                </Item>
+
+                <Item
+                    to="/profile"
+                    onClick={(event) =>
+                        handleProtectedClick(
+                            event,
+                            'Чтобы открыть профиль, нужно войти в аккаунт.'
+                        )
+                    }
+                >
+                    {user?.avatarUrl ? (
+                        <ProfileAvatar>
+                            <img src={user.avatarUrl} alt={user.nickname} />
+                        </ProfileAvatar>
+                    ) : (
+                        <FiUser />
+                    )}
+
+                    <span>Профиль</span>
+                </Item>
+            </Nav>
+        </NavWrapper>
+    );
+}
+
+const NavWrapper = styled.div`
+    display: none;
+
+    @media (max-width: ${({ theme }) => theme.breakpoints.tablet}) {
+        position: fixed;
+        left: 10px;
+        right: 10px;
+        bottom: 10px;
+        z-index: 30;
+        height: 70px;
+        padding: 8px;
+        border: 1px solid ${({ theme }) => theme.colors.border};
+        border-radius: 24px;
+        background: rgba(16, 19, 34, 0.92);
+        backdrop-filter: blur(18px);
+        box-shadow: 0 18px 40px ${({ theme }) => theme.colors.shadow};
+        display: block;
+        overflow-x: auto;
+        overflow-y: hidden;
+
+        scrollbar-width: none;
+
+        &::-webkit-scrollbar {
+            display: none;
+        }
+    }
+`;
+
+const Nav = styled.nav`
+    min-width: max-content;
+    height: 100%;
+    display: flex;
+    gap: 5px;
+`;
+
+const Item = styled(NavLink)`
+    width: 68px;
+    height: 54px;
+    border-radius: 18px;
+    color: ${({ theme }) => theme.colors.textMuted};
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    font-size: 11px;
+    font-weight: 800;
+
+    svg {
+        font-size: 20px;
+    }
+
+    &.active {
+        color: white;
+        background: linear-gradient(
+                135deg,
+                rgba(124, 58, 237, 0.9),
+                rgba(37, 99, 235, 0.9)
+        );
+    }
+`;
+
+const IconWithBadge = styled.span`
+    position: relative;
+    width: 24px;
+    height: 22px;
+    display: grid;
+    place-items: center;
+`;
+
+const UnreadBadge = styled.span`
+    position: absolute;
+    right: -10px;
+    top: -8px;
+    min-width: 19px;
+    height: 19px;
+    padding: 0 5px;
+    border: 2px solid rgba(16, 19, 34, 0.95);
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: linear-gradient(135deg, #ef4444, #ec4899);
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    font-weight: 900;
+    line-height: 1;
+`;
+
+const ProfileAvatar = styled.div`
+    width: 22px;
+    height: 22px;
+    overflow: hidden;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #7c3aed, #2563eb);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+
+    img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+`;

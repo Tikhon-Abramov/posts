@@ -1,0 +1,295 @@
+import { useEffect, type ReactNode } from 'react';
+import {
+  Navigate,
+  createBrowserRouter,
+  useNavigate,
+} from 'react-router-dom';
+import { useDispatch, useSelector } from 'react-redux';
+import styled from 'styled-components';
+import { FiLock, FiShield } from 'react-icons/fi';
+
+import type { AppDispatch, RootState } from './store';
+
+import { AppLayout } from '../widgets/layout/AppLayout';
+import { AdminLayout } from '../widgets/admin/AdminLayout';
+
+import { HomePage } from '../pages/HomePage';
+import { PremiumFeedPage } from '../pages/PremiumFeedPage';
+import { ProfilePage } from '../pages/ProfilePage';
+import { SavedPostsPage } from '../pages/SavedPostsPage';
+import { ContentRequestPage } from '../pages/ContentRequestPage';
+import { SubscriptionPage } from '../pages/SubscriptionPage';
+import { MyPostsPage } from '../pages/MyPostsPage';
+import { NotificationsPage } from '../pages/NotificationsPage';
+import { PostDetailsPage } from '../pages/PostDetailsPage';
+import { SearchPage } from '../pages/SearchPage';
+
+import { AdminDashboardPage } from '../pages/admin/AdminDashboardPage';
+import { AdminPostsPage } from '../pages/admin/AdminPostsPage';
+import { AdminRequestsPage } from '../pages/admin/AdminRequestsPage';
+import { AdminCreatePostPage } from '../pages/admin/AdminCreatePostPage';
+
+import { openAuthModal } from '../entities/auth/slice/authSlice';
+
+interface GuardProps {
+  children: ReactNode;
+  reason?: string;
+}
+
+function RequireAuth({ children, reason }: GuardProps) {
+  const dispatch = useDispatch<AppDispatch>();
+
+  const accessToken = useSelector((state: RootState) => state.auth.accessToken);
+
+  useEffect(() => {
+    if (!accessToken) {
+      dispatch(
+          openAuthModal({
+            mode: 'login',
+            reason:
+                reason ||
+                'Чтобы открыть этот раздел, нужно войти в аккаунт или создать новый.',
+          })
+      );
+    }
+  }, [accessToken, dispatch, reason]);
+
+  if (!accessToken) {
+    return (
+        <AccessStub
+            icon={<FiLock />}
+            title="Нужна авторизация"
+            text="Этот раздел доступен только авторизованным пользователям."
+        />
+    );
+  }
+
+  return children;
+}
+
+function RequireAdmin({ children }: GuardProps) {
+  const dispatch = useDispatch<AppDispatch>();
+
+  const { accessToken, user } = useSelector((state: RootState) => state.auth);
+
+  useEffect(() => {
+    if (!accessToken) {
+      dispatch(
+          openAuthModal({
+            mode: 'login',
+            reason:
+                'Чтобы открыть админ-панель, нужно войти в администраторский аккаунт.',
+          })
+      );
+    }
+  }, [accessToken, dispatch]);
+
+  if (!accessToken) {
+    return (
+        <AccessStub
+            icon={<FiShield />}
+            title="Вход для администратора"
+            text="Админ-панель доступна только после входа в аккаунт администратора."
+        />
+    );
+  }
+
+  if (user && user.role !== 'ADMIN') {
+    return <Navigate to="/" replace />;
+  }
+
+  return children;
+}
+
+function AuthModalRoute({ mode }: { mode: 'login' | 'register' }) {
+  const navigate = useNavigate();
+  const dispatch = useDispatch<AppDispatch>();
+
+  useEffect(() => {
+    dispatch(
+        openAuthModal({
+          mode,
+          reason:
+              mode === 'login'
+                  ? 'Войдите в аккаунт, чтобы пользоваться всеми возможностями сайта.'
+                  : 'Создайте аккаунт, чтобы лайкать, комментировать, сохранять посты и оформлять подписку.',
+        })
+    );
+
+    navigate('/', { replace: true });
+  }, [dispatch, mode, navigate]);
+
+  return null;
+}
+
+export const router = createBrowserRouter([
+  {
+    path: '/',
+    element: <AppLayout />,
+    children: [
+      {
+        index: true,
+        element: <HomePage />,
+      },
+      {
+        path: 'premium',
+        element: <PremiumFeedPage />,
+      },
+      {
+        path: 'search',
+        element: <SearchPage />,
+      },
+      {
+        path: 'posts/:postId',
+        element: <PostDetailsPage />,
+      },
+      {
+        path: 'my-posts',
+        element: (
+            <RequireAuth reason="Чтобы смотреть свои публикации, нужно войти в аккаунт.">
+              <MyPostsPage />
+            </RequireAuth>
+        ),
+      },
+      {
+        path: 'notifications',
+        element: (
+            <RequireAuth reason="Чтобы смотреть уведомления, нужно войти в аккаунт.">
+              <NotificationsPage />
+            </RequireAuth>
+        ),
+      },
+      {
+        path: 'saved',
+        element: (
+            <RequireAuth reason="Чтобы смотреть сохраненные посты, нужно войти в аккаунт.">
+              <SavedPostsPage />
+            </RequireAuth>
+        ),
+      },
+      {
+        path: 'profile',
+        element: (
+            <RequireAuth reason="Чтобы открыть профиль, нужно войти в аккаунт.">
+              <ProfilePage />
+            </RequireAuth>
+        ),
+      },
+      {
+        path: 'submit-content',
+        element: (
+            <RequireAuth reason="Чтобы предложить публикацию админу, нужно войти в аккаунт.">
+              <ContentRequestPage />
+            </RequireAuth>
+        ),
+      },
+      {
+        path: 'subscription',
+        element: (
+            <RequireAuth reason="Чтобы оформить подписку, нужно войти в аккаунт.">
+              <SubscriptionPage />
+            </RequireAuth>
+        ),
+      },
+    ],
+  },
+
+  {
+    path: '/login',
+    element: <AuthModalRoute mode="login" />,
+  },
+
+  {
+    path: '/register',
+    element: <AuthModalRoute mode="register" />,
+  },
+
+  {
+    path: '/admin',
+    element: (
+        <RequireAdmin>
+          <AdminLayout />
+        </RequireAdmin>
+    ),
+    children: [
+      {
+        index: true,
+        element: <AdminDashboardPage />,
+      },
+      {
+        path: 'posts',
+        element: <AdminPostsPage />,
+      },
+      {
+        path: 'posts/create',
+        element: <AdminCreatePostPage />,
+      },
+      {
+        path: 'requests',
+        element: <AdminRequestsPage />,
+      },
+    ],
+  },
+
+  {
+    path: '*',
+    element: <Navigate to="/" replace />,
+  },
+]);
+
+interface AccessStubProps {
+  icon: ReactNode;
+  title: string;
+  text: string;
+}
+
+function AccessStub({ icon, title, text }: AccessStubProps) {
+  return (
+      <Stub>
+        <IconBox>{icon}</IconBox>
+        <h1>{title}</h1>
+        <p>{text}</p>
+      </Stub>
+  );
+}
+
+const Stub = styled.section`
+  min-height: 420px;
+  padding: 32px 22px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background:
+      radial-gradient(circle at top left, rgba(124, 58, 237, 0.22), transparent 34%),
+      radial-gradient(circle at bottom right, rgba(239, 68, 68, 0.14), transparent 34%),
+      rgba(21, 25, 43, 0.84);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+
+  h1 {
+    margin: 16px 0 8px;
+    font-size: clamp(26px, 4vw, 42px);
+    letter-spacing: -0.06em;
+  }
+
+  p {
+    max-width: 520px;
+    margin: 0;
+    color: ${({ theme }) => theme.colors.textMuted};
+    line-height: 1.6;
+  }
+`;
+
+const IconBox = styled.div`
+  width: 72px;
+  height: 72px;
+  border-radius: 26px;
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  color: white;
+  display: grid;
+  place-items: center;
+  font-size: 34px;
+  box-shadow: 0 22px 50px rgba(124, 58, 237, 0.28);
+`;

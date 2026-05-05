@@ -1,0 +1,62 @@
+import styled from 'styled-components';
+
+export function AdminDashboardPage() {
+  return (
+    <Page>
+      <Title>Админ-панель</Title>
+      <Grid>
+        <Card>
+          <Label>Посты</Label>
+          <Value>0</Value>
+        </Card>
+        <Card>
+          <Label>Заявки</Label>
+          <Value>0</Value>
+        </Card>
+        <Card>
+          <Label>Премиум пользователи</Label>
+          <Value>0</Value>
+        </Card>
+      </Grid>
+    </Page>
+  );
+}
+
+const Page = styled.div`
+  display: grid;
+  gap: 18px;
+`;
+
+const Title = styled.h1`
+  margin: 0;
+  font-size: clamp(28px, 4vw, 42px);
+  letter-spacing: -0.06em;
+`;
+
+const Grid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.tablet}) {
+    grid-template-columns: 1fr;
+  }
+`;
+
+const Card = styled.section`
+  padding: 18px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background: rgba(21, 25, 43, 0.82);
+`;
+
+const Label = styled.div`
+  color: ${({ theme }) => theme.colors.textMuted};
+  font-weight: 800;
+`;
+
+const Value = styled.div`
+  margin-top: 10px;
+  font-size: 34px;
+  font-weight: 900;
+`;

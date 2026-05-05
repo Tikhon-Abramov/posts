@@ -1,0 +1,535 @@
+import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FiLock, FiMail, FiUser, FiX } from 'react-icons/fi';
+import { useDispatch, useSelector } from 'react-redux';
+import styled, { keyframes } from 'styled-components';
+
+import type { AppDispatch, RootState } from '../../app/store';
+import {
+    closeAuthModal,
+    setCredentials,
+    switchAuthModalMode,
+} from '../../entities/auth/slice/authSlice';
+import {
+    useLoginMutation,
+    useRegisterMutation,
+} from '../../entities/auth/api/authApi';
+
+export function AuthModal() {
+    const dispatch = useDispatch<AppDispatch>();
+
+    const { isOpen, mode, reason } = useSelector(
+        (state: RootState) => state.auth.authModal
+    );
+
+    const [loginUser, loginState] = useLoginMutation();
+    const [registerUser, registerState] = useRegisterMutation();
+
+    const [nickname, setNickname] = useState('');
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+
+    const isLogin = mode === 'login';
+    const isLoading = loginState.isLoading || registerState.isLoading;
+
+    const title = isLogin ? 'Вход в аккаунт' : 'Создание аккаунта';
+
+    const subtitle = isLogin
+        ? 'Войди, чтобы лайкать, комментировать, сохранять посты и открывать личные разделы.'
+        : 'Создай аккаунт, чтобы получить доступ ко всем возможностям сайта.';
+
+    const buttonText = isLogin ? 'Войти' : 'Создать аккаунт';
+
+    const errorMessage = useMemo(() => {
+        const error = loginState.error || registerState.error;
+
+        if (!error) {
+            return null;
+        }
+
+        if ('data' in error) {
+            const data = error.data as {
+                message?: string;
+                error?: string;
+            };
+
+            return data?.message || data?.error || 'Не удалось выполнить запрос.';
+        }
+
+        return 'Ошибка соединения с сервером.';
+    }, [loginState.error, registerState.error]);
+
+    useEffect(() => {
+        if (!isOpen) {
+            return;
+        }
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                dispatch(closeAuthModal());
+            }
+        };
+
+        document.body.style.overflow = 'hidden';
+        window.addEventListener('keydown', handleKeyDown);
+
+        return () => {
+            document.body.style.overflow = '';
+            window.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [dispatch, isOpen]);
+
+    useEffect(() => {
+        if (!isOpen) {
+            setNickname('');
+            setEmail('');
+            setPassword('');
+        }
+    }, [isOpen]);
+
+    const handleClose = () => {
+        if (isLoading) {
+            return;
+        }
+
+        dispatch(closeAuthModal());
+    };
+
+    const handleOverlayClick = () => {
+        handleClose();
+    };
+
+    const handleModalClick = (event: React.MouseEvent<HTMLDivElement>) => {
+        event.stopPropagation();
+    };
+
+    const handleModeSwitch = () => {
+        if (isLoading) {
+            return;
+        }
+
+        dispatch(switchAuthModalMode(isLogin ? 'register' : 'login'));
+    };
+
+    const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+        event.preventDefault();
+
+        const normalizedEmail = email.trim().toLowerCase();
+        const normalizedNickname = nickname.trim();
+
+        if (!normalizedEmail || !password.trim()) {
+            return;
+        }
+
+        if (!isLogin && !normalizedNickname) {
+            return;
+        }
+
+        try {
+            const response = isLogin
+                ? await loginUser({
+                    email: normalizedEmail,
+                    password,
+                }).unwrap()
+                : await registerUser({
+                    nickname: normalizedNickname,
+                    email: normalizedEmail,
+                    password,
+                }).unwrap();
+
+            dispatch(setCredentials(response));
+        } catch {
+            /*
+              Ошибка уже отображается через errorMessage.
+              Здесь catch нужен, чтобы unwrap() не пробрасывал ошибку выше.
+            */
+        }
+    };
+
+    if (!isOpen) {
+        return null;
+    }
+
+    return (
+        <Overlay onClick={handleOverlayClick}>
+            <Modal onClick={handleModalClick}>
+                <CloseButton type="button" onClick={handleClose} aria-label="Закрыть">
+                    <FiX />
+                </CloseButton>
+
+                <Visual>
+                    <Glow />
+                    <IconCircle>
+                        {isLogin ? <FiLock /> : <FiUser />}
+                    </IconCircle>
+                </Visual>
+
+                <Content>
+                    <Title>{title}</Title>
+                    <Subtitle>{subtitle}</Subtitle>
+
+                    {reason && <Reason>{reason}</Reason>}
+
+                    <Form onSubmit={handleSubmit}>
+                        {!isLogin && (
+                            <Field>
+                                <Label htmlFor="auth-nickname">Ник</Label>
+                                <InputBox>
+                                    <FiUser />
+                                    <Input
+                                        id="auth-nickname"
+                                        type="text"
+                                        placeholder="Например, neon_user"
+                                        value={nickname}
+                                        disabled={isLoading}
+                                        autoComplete="nickname"
+                                        onChange={(event) => setNickname(event.target.value)}
+                                    />
+                                </InputBox>
+                            </Field>
+                        )}
+
+                        <Field>
+                            <Label htmlFor="auth-email">Почта</Label>
+                            <InputBox>
+                                <FiMail />
+                                <Input
+                                    id="auth-email"
+                                    type="email"
+                                    placeholder="you@example.com"
+                                    value={email}
+                                    disabled={isLoading}
+                                    autoComplete="email"
+                                    onChange={(event) => setEmail(event.target.value)}
+                                />
+                            </InputBox>
+                        </Field>
+
+                        <Field>
+                            <Label htmlFor="auth-password">Пароль</Label>
+                            <InputBox>
+                                <FiLock />
+                                <Input
+                                    id="auth-password"
+                                    type="password"
+                                    placeholder="Минимум 6 символов"
+                                    value={password}
+                                    disabled={isLoading}
+                                    autoComplete={isLogin ? 'current-password' : 'new-password'}
+                                    onChange={(event) => setPassword(event.target.value)}
+                                />
+                            </InputBox>
+                        </Field>
+
+                        {errorMessage && <ErrorText>{errorMessage}</ErrorText>}
+
+                        <SubmitButton type="submit" disabled={isLoading}>
+                            {isLoading ? 'Подождите...' : buttonText}
+                        </SubmitButton>
+                    </Form>
+
+                    <SwitchText>
+                        {isLogin ? 'Еще нет аккаунта?' : 'Уже есть аккаунт?'}
+                        <button type="button" onClick={handleModeSwitch} disabled={isLoading}>
+                            {isLogin ? 'Создать аккаунт' : 'Войти'}
+                        </button>
+                    </SwitchText>
+                </Content>
+            </Modal>
+        </Overlay>
+    );
+}
+
+const overlayAppear = keyframes`
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+`;
+
+const modalAppear = keyframes`
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+`;
+
+const Overlay = styled.div`
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  padding: 18px;
+  background: rgba(4, 6, 14, 0.72);
+  backdrop-filter: blur(18px);
+  display: grid;
+  place-items: center;
+  animation: ${overlayAppear} 0.18s ease;
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    padding: 10px;
+    align-items: end;
+  }
+`;
+
+const Modal = styled.div`
+  position: relative;
+  width: min(940px, 100%);
+  min-height: 560px;
+  overflow: hidden;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: 34px;
+  background:
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.26), transparent 34%),
+    radial-gradient(circle at bottom right, rgba(239, 68, 68, 0.16), transparent 34%),
+    ${({ theme }) => theme.colors.bgCard};
+  box-shadow: 0 34px 90px rgba(0, 0, 0, 0.52);
+  display: grid;
+  grid-template-columns: 0.92fr 1.08fr;
+  animation: ${modalAppear} 0.22s ease;
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.tablet}) {
+    grid-template-columns: 1fr;
+    min-height: auto;
+  }
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    max-height: calc(100vh - 20px);
+    overflow-y: auto;
+    border-radius: 28px 28px 18px 18px;
+  }
+`;
+
+const CloseButton = styled.button`
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 3;
+  width: 42px;
+  height: 42px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: rgba(255, 255, 255, 0.06);
+  color: ${({ theme }) => theme.colors.text};
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
+`;
+
+const Visual = styled.div`
+  position: relative;
+  min-height: 560px;
+  padding: 34px;
+  border-right: 1px solid ${({ theme }) => theme.colors.border};
+  background:
+    linear-gradient(135deg, rgba(124, 58, 237, 0.25), rgba(37, 99, 235, 0.14)),
+    rgba(255, 255, 255, 0.025);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  &::before {
+    content: 'PulseFeed';
+    position: absolute;
+    left: 28px;
+    top: 28px;
+    font-size: 24px;
+    font-weight: 900;
+    letter-spacing: -0.05em;
+    background: linear-gradient(135deg, #8b5cf6, #2563eb, #ef4444);
+    -webkit-background-clip: text;
+    color: transparent;
+  }
+
+  &::after {
+    content: 'Фото • Видео • Premium';
+    position: absolute;
+    left: 28px;
+    bottom: 28px;
+    color: ${({ theme }) => theme.colors.textMuted};
+    font-weight: 700;
+  }
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.tablet}) {
+    min-height: 180px;
+    border-right: none;
+    border-bottom: 1px solid ${({ theme }) => theme.colors.border};
+
+    &::after {
+      display: none;
+    }
+  }
+`;
+
+const Glow = styled.div`
+  position: absolute;
+  width: 240px;
+  height: 240px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #7c3aed, #2563eb, #ef4444);
+  filter: blur(34px);
+  opacity: 0.46;
+`;
+
+const IconCircle = styled.div`
+  position: relative;
+  width: 152px;
+  height: 152px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 54px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.03)),
+    rgba(8, 10, 18, 0.48);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  color: white;
+  display: grid;
+  place-items: center;
+  font-size: 64px;
+`;
+
+const Content = styled.div`
+  padding: 72px 42px 38px;
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.tablet}) {
+    padding: 34px 22px 26px;
+  }
+`;
+
+const Title = styled.h2`
+  margin: 0;
+  font-size: clamp(30px, 4vw, 46px);
+  line-height: 1;
+  letter-spacing: -0.07em;
+`;
+
+const Subtitle = styled.p`
+  margin: 14px 0 0;
+  color: ${({ theme }) => theme.colors.textMuted};
+  line-height: 1.6;
+`;
+
+const Reason = styled.div`
+  margin-top: 18px;
+  padding: 13px 14px;
+  border: 1px solid rgba(124, 58, 237, 0.34);
+  border-radius: 18px;
+  background: rgba(124, 58, 237, 0.12);
+  color: ${({ theme }) => theme.colors.text};
+  line-height: 1.45;
+  font-weight: 600;
+`;
+
+const Form = styled.form`
+  margin-top: 24px;
+  display: grid;
+  gap: 15px;
+`;
+
+const Field = styled.div`
+  display: grid;
+  gap: 8px;
+`;
+
+const Label = styled.label`
+  color: ${({ theme }) => theme.colors.textMuted};
+  font-size: 13px;
+  font-weight: 800;
+`;
+
+const InputBox = styled.div`
+  height: 52px;
+  padding: 0 15px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.045);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: ${({ theme }) => theme.colors.textMuted};
+
+  &:focus-within {
+    border-color: rgba(139, 92, 246, 0.8);
+    box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.14);
+  }
+
+  svg {
+    flex: 0 0 auto;
+    font-size: 18px;
+  }
+`;
+
+const Input = styled.input`
+  width: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: ${({ theme }) => theme.colors.text};
+
+  &::placeholder {
+    color: rgba(156, 163, 183, 0.68);
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+  }
+`;
+
+const ErrorText = styled.div`
+  padding: 12px 14px;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 16px;
+  background: rgba(239, 68, 68, 0.1);
+  color: #fecaca;
+  font-weight: 700;
+`;
+
+const SubmitButton = styled.button`
+  height: 54px;
+  border: none;
+  border-radius: 19px;
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  color: white;
+  font-weight: 900;
+  box-shadow: 0 18px 44px rgba(124, 58, 237, 0.25);
+
+  &:hover:not(:disabled) {
+    filter: brightness(1.08);
+  }
+
+  &:disabled {
+    opacity: 0.62;
+    cursor: not-allowed;
+  }
+`;
+
+const SwitchText = styled.div`
+  margin-top: 20px;
+  color: ${({ theme }) => theme.colors.textMuted};
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  justify-content: center;
+
+  button {
+    border: none;
+    padding: 0;
+    background: transparent;
+    color: ${({ theme }) => theme.colors.primaryHover};
+    font-weight: 900;
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+  }
+`;

@@ -1,0 +1,311 @@
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
+import styled from 'styled-components';
+import {
+    FiChevronDown,
+    FiChevronUp,
+    FiExternalLink,
+    FiMessageCircle,
+} from 'react-icons/fi';
+
+import type { Post } from '../model/postTypes';
+import { PostActions } from './PostActions';
+
+import { CommentForm } from '../../../features/post-interactions/CommentForm';
+import { CommentsList } from '../../../features/post-interactions/CommentsList';
+
+interface PostCardProps {
+    post: Post;
+}
+
+export function PostCard({ post }: PostCardProps) {
+    const [isCommentsOpen, setIsCommentsOpen] = useState(false);
+
+    const firstMedia = post.media[0];
+
+    return (
+        <Card>
+            <CardHeader>
+                <Author>
+                    <AvatarWrapper>
+                        {post.author.avatarUrl ? (
+                            <Avatar src={post.author.avatarUrl} alt={post.author.nickname} />
+                        ) : (
+                            <AvatarFallback>
+                                {post.author.nickname.slice(0, 1).toUpperCase()}
+                            </AvatarFallback>
+                        )}
+                    </AvatarWrapper>
+
+                    <AuthorInfo>
+                        <strong>{post.author.nickname}</strong>
+                        <span>{new Date(post.createdAt).toLocaleDateString('ru-RU')}</span>
+                    </AuthorInfo>
+                </Author>
+
+                <HeaderActions>
+                    {post.visibility === 'PREMIUM' && <Badge>Premium</Badge>}
+
+                    <OpenPostLink to={`/posts/${post.id}`}>
+                        <FiExternalLink />
+                        <span>Открыть</span>
+                    </OpenPostLink>
+                </HeaderActions>
+            </CardHeader>
+
+            {firstMedia && (
+                <MediaBox>
+                    <MediaLink to={`/posts/${post.id}`} aria-label="Открыть пост">
+                        {firstMedia.type === 'IMAGE' ? (
+                            <img src={firstMedia.url} alt={post.title || 'Пост'} />
+                        ) : (
+                            <video src={firstMedia.url} controls />
+                        )}
+                    </MediaLink>
+                </MediaBox>
+            )}
+
+            <Content>
+                {post.title && <Title>{post.title}</Title>}
+                {post.description && <Description>{post.description}</Description>}
+            </Content>
+
+            <PostActions post={post} />
+
+            <CommentsToggle
+                type="button"
+                onClick={() => setIsCommentsOpen((current) => !current)}
+            >
+        <span>
+          <FiMessageCircle />
+            {post.commentsCount} комментариев
+        </span>
+
+                {isCommentsOpen ? <FiChevronUp /> : <FiChevronDown />}
+            </CommentsToggle>
+
+            {isCommentsOpen && (
+                <CommentsPanel>
+                    <CommentForm postId={post.id} />
+                    <Divider />
+                    <CommentsList postId={post.id} />
+                </CommentsPanel>
+            )}
+        </Card>
+    );
+}
+
+const Card = styled.article`
+    overflow: hidden;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: ${({ theme }) => theme.radius.lg};
+    background: rgba(21, 25, 43, 0.88);
+    box-shadow: 0 22px 60px rgba(0, 0, 0, 0.22);
+`;
+
+const CardHeader = styled.header`
+    padding: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        align-items: flex-start;
+    }
+`;
+
+const Author = styled.div`
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+`;
+
+const AvatarWrapper = styled.div`
+    flex: 0 0 auto;
+`;
+
+const Avatar = styled.img`
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #7c3aed, #2563eb);
+    object-fit: cover;
+`;
+
+const AvatarFallback = styled.div`
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #7c3aed, #2563eb);
+    color: white;
+    display: grid;
+    place-items: center;
+    font-weight: 900;
+`;
+
+const AuthorInfo = styled.div`
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+
+    strong {
+        overflow: hidden;
+        font-size: 14px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    span {
+        color: ${({ theme }) => theme.colors.textMuted};
+        font-size: 12px;
+    }
+`;
+
+const HeaderActions = styled.div`
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        flex-direction: column;
+        align-items: flex-end;
+    }
+`;
+
+const Badge = styled.span`
+    flex: 0 0 auto;
+    padding: 6px 10px;
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: linear-gradient(135deg, #7c3aed, #ec4899);
+    color: white;
+    font-size: 12px;
+    font-weight: 900;
+`;
+
+const OpenPostLink = styled(Link)`
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: rgba(255, 255, 255, 0.045);
+  color: ${({ theme }) => theme.colors.textMuted};
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 900;
+
+  svg {
+    font-size: 15px;
+  }
+
+  &:hover {
+    color: ${({ theme }) => theme.colors.text};
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(139, 92, 246, 0.42);
+  }
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    span {
+      display: none;
+    }
+  }
+`;
+
+const MediaBox = styled.div`
+  background: #05060d;
+`;
+
+const MediaLink = styled(Link)`
+  display: block;
+  color: inherit;
+
+  img,
+  video {
+    width: 100%;
+    max-height: 720px;
+    object-fit: cover;
+    display: block;
+  }
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    img,
+    video {
+      max-height: 520px;
+    }
+  }
+`;
+
+const Content = styled.div`
+    padding: 14px 14px 4px;
+`;
+
+const Title = styled.h2`
+    margin: 0 0 8px;
+    font-size: 19px;
+    letter-spacing: -0.03em;
+`;
+
+const Description = styled.p`
+    margin: 0;
+    color: ${({ theme }) => theme.colors.textMuted};
+    line-height: 1.55;
+    white-space: pre-wrap;
+`;
+
+const CommentsToggle = styled.button`
+    width: calc(100% - 28px);
+    min-height: 44px;
+    margin: 0 14px 14px;
+    padding: 0 13px;
+    border: 1px solid ${({ theme }) => theme.colors.border};
+    border-radius: ${({ theme }) => theme.radius.full};
+    background: rgba(255, 255, 255, 0.04);
+    color: ${({ theme }) => theme.colors.textMuted};
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    font-weight: 900;
+
+    span {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    svg {
+        flex: 0 0 auto;
+        font-size: 18px;
+    }
+
+    &:hover {
+        color: ${({ theme }) => theme.colors.text};
+        background: rgba(255, 255, 255, 0.075);
+        border-color: rgba(139, 92, 246, 0.42);
+    }
+
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        width: calc(100% - 24px);
+        margin: 0 12px 12px;
+    }
+`;
+
+const CommentsPanel = styled.div`
+    padding: 0 14px 16px;
+    display: grid;
+    gap: 14px;
+
+    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+        padding: 0 12px 14px;
+    }
+`;
+
+const Divider = styled.div`
+    height: 1px;
+    background: ${({ theme }) => theme.colors.border};
+`;

@@ -1,0 +1,969 @@
+import { useEffect, useMemo, useState } from 'react';
+import styled from 'styled-components';
+import {
+    FiAlertCircle,
+    FiBookmark,
+    FiCalendar,
+    FiFileText,
+    FiFilter,
+    FiGlobe,
+    FiHeart,
+    FiImage,
+    FiMessageCircle,
+    FiRefreshCw,
+    FiSearch,
+    FiStar,
+    FiThumbsDown,
+    FiTrash2,
+    FiVideo,
+} from 'react-icons/fi';
+
+import type {
+    MediaType,
+    Post,
+    PostVisibility,
+} from '../../entities/post/model/postTypes';
+
+type VisibilityFilter = 'ALL' | PostVisibility;
+type MediaFilter = 'ALL' | MediaType;
+
+type MockPostInteractions = Record<
+    string,
+    Record<
+        string,
+        {
+            reaction: 'like' | 'dislike' | null;
+            saved: boolean;
+        }
+    >
+>;
+
+const MOCK_POSTS_KEY = 'pulsefeed_mock_posts';
+const MOCK_POST_INTERACTIONS_KEY = 'pulsefeed_mock_post_interactions';
+
+export function AdminPostsPage() {
+    const [posts, setPosts] = useState<Post[]>([]);
+    const [visibilityFilter, setVisibilityFilter] =
+        useState<VisibilityFilter>('ALL');
+    const [mediaFilter, setMediaFilter] = useState<MediaFilter>('ALL');
+    const [search, setSearch] = useState('');
+
+    const loadPosts = () => {
+        setPosts(getSavedPosts());
+    };
+
+    useEffect(() => {
+        loadPosts();
+    }, []);
+
+    const stats = useMemo(() => {
+        const publicCount = posts.filter(
+            (post) => post.visibility === 'PUBLIC'
+        ).length;
+
+        const premiumCount = posts.filter(
+            (post) => post.visibility === 'PREMIUM'
+        ).length;
+
+        const imageCount = posts.filter(
+            (post) => post.media[0]?.type === 'IMAGE'
+        ).length;
+
+        const videoCount = posts.filter(
+            (post) => post.media[0]?.type === 'VIDEO'
+        ).length;
+
+        return {
+            publicCount,
+            premiumCount,
+            imageCount,
+            videoCount,
+        };
+    }, [posts]);
+
+    const filteredPosts = useMemo(() => {
+        const normalizedSearch = search.trim().toLowerCase();
+
+        return posts
+            .filter((post) => {
+                if (visibilityFilter !== 'ALL' && post.visibility !== visibilityFilter) {
+                    return false;
+                }
+
+                if (mediaFilter !== 'ALL' && post.media[0]?.type !== mediaFilter) {
+                    return false;
+                }
+
+                if (!normalizedSearch) {
+                    return true;
+                }
+
+                const title = post.title?.toLowerCase() || '';
+                const description = post.description?.toLowerCase() || '';
+                const author = post.author.nickname.toLowerCase();
+
+                return (
+                    title.includes(normalizedSearch) ||
+                    description.includes(normalizedSearch) ||
+                    author.includes(normalizedSearch)
+                );
+            })
+            .sort(
+                (a, b) =>
+                    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+            );
+    }, [mediaFilter, posts, search, visibilityFilter]);
+
+    const updatePosts = (nextPosts: Post[]) => {
+        setPosts(nextPosts);
+        localStorage.setItem(MOCK_POSTS_KEY, JSON.stringify(nextPosts));
+    };
+
+    const handleDeletePost = (postId: number) => {
+        const post = posts.find((item) => item.id === postId);
+
+        if (!post) {
+            return;
+        }
+
+        const isConfirmed = window.confirm(
+            `Удалить пост «${post.title || 'Без названия'}»? Это действие нельзя отменить.`
+        );
+
+        if (!isConfirmed) {
+            return;
+        }
+
+        const nextPosts = posts.filter((item) => item.id !== postId);
+
+        updatePosts(nextPosts);
+        removePostInteractions(postId);
+    };
+
+    const resetFilters = () => {
+        setVisibilityFilter('ALL');
+        setMediaFilter('ALL');
+        setSearch('');
+    };
+
+    return (
+        <Page>
+            <Hero>
+                <HeroContent>
+                    <Eyebrow>Admin</Eyebrow>
+                    <Title>Управление постами</Title>
+                    <Subtitle>
+                        Здесь админ видит все опубликованные материалы: обычные и Premium
+                        посты, фото и видео. Пока данные хранятся во фронтовом localStorage.
+                    </Subtitle>
+                </HeroContent>
+
+                <RefreshButton type="button" onClick={loadPosts}>
+                    <FiRefreshCw />
+                    Обновить
+                </RefreshButton>
+            </Hero>
+
+            <StatsGrid>
+                <StatCard>
+                    <StatIcon $variant="blue">
+                        <FiGlobe />
+                    </StatIcon>
+
+                    <StatInfo>
+                        <strong>{stats.publicCount}</strong>
+                        <span>Обычных постов</span>
+                    </StatInfo>
+                </StatCard>
+
+                <StatCard>
+                    <StatIcon $variant="pink">
+                        <FiStar />
+                    </StatIcon>
+
+                    <StatInfo>
+                        <strong>{stats.premiumCount}</strong>
+                        <span>Premium постов</span>
+                    </StatInfo>
+                </StatCard>
+
+                <StatCard>
+                    <StatIcon $variant="purple">
+                        <FiImage />
+                    </StatIcon>
+
+                    <StatInfo>
+                        <strong>{stats.imageCount}</strong>
+                        <span>Фото</span>
+                    </StatInfo>
+                </StatCard>
+
+                <StatCard>
+                    <StatIcon $variant="red">
+                        <FiVideo />
+                    </StatIcon>
+
+                    <StatInfo>
+                        <strong>{stats.videoCount}</strong>
+                        <span>Видео</span>
+                    </StatInfo>
+                </StatCard>
+            </StatsGrid>
+
+            <Toolbar>
+                <SearchBox>
+                    <FiSearch />
+                    <input
+                        type="text"
+                        placeholder="Поиск по названию, описанию или автору"
+                        value={search}
+                        onChange={(event) => setSearch(event.target.value)}
+                    />
+                </SearchBox>
+
+                <Filters>
+                    <FilterSelect
+                        value={visibilityFilter}
+                        onChange={(event) =>
+                            setVisibilityFilter(event.target.value as VisibilityFilter)
+                        }
+                    >
+                        <option value="ALL">Все ленты</option>
+                        <option value="PUBLIC">Обычная лента</option>
+                        <option value="PREMIUM">Premium</option>
+                    </FilterSelect>
+
+                    <FilterSelect
+                        value={mediaFilter}
+                        onChange={(event) =>
+                            setMediaFilter(event.target.value as MediaFilter)
+                        }
+                    >
+                        <option value="ALL">Все типы</option>
+                        <option value="IMAGE">Фото</option>
+                        <option value="VIDEO">Видео</option>
+                    </FilterSelect>
+
+                    <ResetButton type="button" onClick={resetFilters}>
+                        <FiFilter />
+                        Сбросить
+                    </ResetButton>
+                </Filters>
+            </Toolbar>
+
+            {filteredPosts.length ? (
+                <PostsGrid>
+                    {filteredPosts.map((post) => {
+                        const firstMedia = post.media[0];
+
+                        return (
+                            <PostCard key={post.id}>
+                                <Preview>
+                                    {firstMedia?.type === 'IMAGE' ? (
+                                        <img src={firstMedia.url} alt={post.title || 'Пост'} />
+                                    ) : firstMedia?.type === 'VIDEO' ? (
+                                        <VideoPreview>
+                                            <video src={firstMedia.url} muted />
+                                            <VideoOverlay>
+                                                <FiVideo />
+                                                Видео
+                                            </VideoOverlay>
+                                        </VideoPreview>
+                                    ) : (
+                                        <Placeholder>
+                                            <FiFileText />
+                                            <span>Нет медиа</span>
+                                        </Placeholder>
+                                    )}
+
+                                    <VisibilityBadge $visibility={post.visibility}>
+                                        {post.visibility === 'PREMIUM' ? (
+                                            <>
+                                                <FiStar />
+                                                Premium
+                                            </>
+                                        ) : (
+                                            <>
+                                                <FiGlobe />
+                                                Public
+                                            </>
+                                        )}
+                                    </VisibilityBadge>
+                                </Preview>
+
+                                <CardBody>
+                                    <CardHeader>
+                                        <div>
+                                            <PostTitle>{post.title || 'Без названия'}</PostTitle>
+                                            <Meta>
+                                                @{post.author.nickname} •{' '}
+                                                {new Date(post.createdAt).toLocaleString('ru-RU')}
+                                            </Meta>
+                                        </div>
+
+                                        <MediaBadge>
+                                            {firstMedia?.type === 'VIDEO' ? <FiVideo /> : <FiImage />}
+                                            {firstMedia?.type === 'VIDEO' ? 'Видео' : 'Фото'}
+                                        </MediaBadge>
+                                    </CardHeader>
+
+                                    <Description>
+                                        {post.description || 'Описание не добавлено.'}
+                                    </Description>
+
+                                    <Metrics>
+                                        <Metric>
+                                            <FiHeart />
+                                            <span>{post.likesCount}</span>
+                                        </Metric>
+
+                                        <Metric>
+                                            <FiThumbsDown />
+                                            <span>{post.dislikesCount}</span>
+                                        </Metric>
+
+                                        <Metric>
+                                            <FiMessageCircle />
+                                            <span>{post.commentsCount}</span>
+                                        </Metric>
+
+                                        <Metric>
+                                            <FiBookmark />
+                                            <span>{post.isSavedByMe ? 'Сохранен' : '—'}</span>
+                                        </Metric>
+                                    </Metrics>
+
+                                    <InfoList>
+                                        <InfoItem>
+                                            <strong>ID:</strong>
+                                            <span>{post.id}</span>
+                                        </InfoItem>
+
+                                        <InfoItem>
+                                            <strong>Лента:</strong>
+                                            <span>
+                        {post.visibility === 'PREMIUM'
+                            ? 'Premium'
+                            : 'Обычная'}
+                      </span>
+                                        </InfoItem>
+
+                                        <InfoItem>
+                                            <strong>Дата:</strong>
+                                            <span>
+                        <FiCalendar />
+                                                {new Date(post.createdAt).toLocaleDateString('ru-RU')}
+                      </span>
+                                        </InfoItem>
+                                    </InfoList>
+
+                                    <Actions>
+                                        <DeleteButton
+                                            type="button"
+                                            onClick={() => handleDeletePost(post.id)}
+                                        >
+                                            <FiTrash2 />
+                                            Удалить пост
+                                        </DeleteButton>
+                                    </Actions>
+                                </CardBody>
+                            </PostCard>
+                        );
+                    })}
+                </PostsGrid>
+            ) : (
+                <EmptyCard>
+                    <FiAlertCircle />
+                    <h2>Посты не найдены</h2>
+                    <p>
+                        Попробуйте сбросить фильтры, создать новый пост или принять заявку
+                        пользователя в админке.
+                    </p>
+
+                    <EmptyButton type="button" onClick={resetFilters}>
+                        Сбросить фильтры
+                    </EmptyButton>
+                </EmptyCard>
+            )}
+        </Page>
+    );
+}
+
+function getSavedPosts(): Post[] {
+    const savedPosts = localStorage.getItem(MOCK_POSTS_KEY);
+
+    if (!savedPosts) {
+        return [];
+    }
+
+    try {
+        return JSON.parse(savedPosts) as Post[];
+    } catch {
+        localStorage.removeItem(MOCK_POSTS_KEY);
+        return [];
+    }
+}
+
+function removePostInteractions(postId: number) {
+    const savedInteractions = localStorage.getItem(MOCK_POST_INTERACTIONS_KEY);
+
+    if (!savedInteractions) {
+        return;
+    }
+
+    try {
+        const interactions = JSON.parse(savedInteractions) as MockPostInteractions;
+
+        const nextInteractions = Object.fromEntries(
+            Object.entries(interactions).map(([userId, userInteractions]) => {
+                const nextUserInteractions = { ...userInteractions };
+
+                delete nextUserInteractions[String(postId)];
+
+                return [userId, nextUserInteractions];
+            })
+        );
+
+        localStorage.setItem(
+            MOCK_POST_INTERACTIONS_KEY,
+            JSON.stringify(nextInteractions)
+        );
+    } catch {
+        localStorage.removeItem(MOCK_POST_INTERACTIONS_KEY);
+    }
+}
+
+const Page = styled.div`
+  display: grid;
+  gap: 18px;
+`;
+
+const Hero = styled.section`
+  padding: 22px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background:
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.24), transparent 34%),
+    radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.14), transparent 34%),
+    rgba(21, 25, 43, 0.86);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 18px;
+  }
+`;
+
+const HeroContent = styled.div`
+  min-width: 0;
+`;
+
+const Eyebrow = styled.div`
+  margin-bottom: 8px;
+  color: ${({ theme }) => theme.colors.primaryHover};
+  font-size: 13px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+`;
+
+const Title = styled.h1`
+  margin: 0;
+  font-size: clamp(30px, 5vw, 52px);
+  line-height: 0.96;
+  letter-spacing: -0.075em;
+`;
+
+const Subtitle = styled.p`
+  max-width: 720px;
+  margin: 12px 0 0;
+  color: ${({ theme }) => theme.colors.textMuted};
+  line-height: 1.65;
+`;
+
+const RefreshButton = styled.button`
+  flex: 0 0 auto;
+  min-height: 46px;
+  padding: 0 16px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: rgba(255, 255, 255, 0.06);
+  color: ${({ theme }) => theme.colors.text};
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  font-weight: 900;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(139, 92, 246, 0.46);
+  }
+`;
+
+const StatsGrid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    grid-template-columns: 1fr;
+  }
+`;
+
+const StatCard = styled.article`
+  padding: 16px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background: rgba(21, 25, 43, 0.84);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+`;
+
+const StatIcon = styled.div<{
+    $variant: 'blue' | 'pink' | 'purple' | 'red';
+}>`
+  flex: 0 0 auto;
+  width: 52px;
+  height: 52px;
+  border-radius: 19px;
+  color: white;
+  display: grid;
+  place-items: center;
+  font-size: 24px;
+  background: ${({ $variant }) => {
+    if ($variant === 'blue') {
+        return 'linear-gradient(135deg, #2563eb, #7c3aed)';
+    }
+
+    if ($variant === 'pink') {
+        return 'linear-gradient(135deg, #7c3aed, #ec4899)';
+    }
+
+    if ($variant === 'red') {
+        return 'linear-gradient(135deg, #ef4444, #7c3aed)';
+    }
+
+    return 'linear-gradient(135deg, #7c3aed, #2563eb)';
+}};
+`;
+
+const StatInfo = styled.div`
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+
+  strong {
+    font-size: 30px;
+    line-height: 1;
+    letter-spacing: -0.06em;
+  }
+
+  span {
+    color: ${({ theme }) => theme.colors.textMuted};
+    font-size: 13px;
+    font-weight: 800;
+  }
+`;
+
+const Toolbar = styled.div`
+  padding: 12px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background: rgba(21, 25, 43, 0.76);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
+    grid-template-columns: 1fr;
+  }
+`;
+
+const SearchBox = styled.div`
+  min-width: 0;
+  height: 46px;
+  padding: 0 14px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: rgba(255, 255, 255, 0.045);
+  color: ${({ theme }) => theme.colors.textMuted};
+  display: flex;
+  align-items: center;
+  gap: 10px;
+
+  svg {
+    flex: 0 0 auto;
+    font-size: 18px;
+  }
+
+  input {
+    width: 100%;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: ${({ theme }) => theme.colors.text};
+  }
+
+  input::placeholder {
+    color: rgba(156, 163, 183, 0.68);
+  }
+
+  &:focus-within {
+    border-color: rgba(139, 92, 246, 0.7);
+    box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.13);
+  }
+`;
+
+const Filters = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+`;
+
+const FilterSelect = styled.select`
+  min-height: 46px;
+  padding: 0 14px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.full};
+  outline: none;
+  background: rgba(255, 255, 255, 0.055);
+  color: ${({ theme }) => theme.colors.text};
+  font-weight: 800;
+
+  option {
+    background: #101322;
+    color: white;
+  }
+
+  &:focus {
+    border-color: rgba(139, 92, 246, 0.7);
+  }
+`;
+
+const ResetButton = styled.button`
+  min-height: 46px;
+  padding: 0 15px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: rgba(255, 255, 255, 0.055);
+  color: ${({ theme }) => theme.colors.text};
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-weight: 900;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.09);
+    border-color: rgba(139, 92, 246, 0.45);
+  }
+`;
+
+const PostsGrid = styled.div`
+  display: grid;
+  gap: 18px;
+`;
+
+const PostCard = styled.article`
+  overflow: hidden;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background: rgba(21, 25, 43, 0.86);
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.desktop}) {
+    grid-template-columns: 1fr;
+  }
+`;
+
+const Preview = styled.div`
+  position: relative;
+  min-height: 280px;
+  background: #05060d;
+
+  img,
+  video {
+    width: 100%;
+    height: 100%;
+    min-height: 280px;
+    object-fit: cover;
+  }
+`;
+
+const VideoPreview = styled.div`
+  position: relative;
+  height: 100%;
+  min-height: 280px;
+
+  video {
+    filter: brightness(0.64);
+  }
+`;
+
+const VideoOverlay = styled.div`
+  position: absolute;
+  inset: 0;
+  color: white;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  font-weight: 900;
+
+  svg {
+    font-size: 44px;
+  }
+`;
+
+const Placeholder = styled.div`
+  min-height: 280px;
+  padding: 24px;
+  background:
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.24), transparent 34%),
+    radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.16), transparent 34%),
+    #080a12;
+  color: ${({ theme }) => theme.colors.textMuted};
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+  text-align: center;
+
+  svg {
+    color: ${({ theme }) => theme.colors.primaryHover};
+    font-size: 46px;
+  }
+
+  span {
+    font-weight: 800;
+  }
+`;
+
+const VisibilityBadge = styled.div<{ $visibility: PostVisibility }>`
+  position: absolute;
+  left: 14px;
+  top: 14px;
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: ${({ $visibility }) =>
+    $visibility === 'PREMIUM'
+        ? 'rgba(236, 72, 153, 0.86)'
+        : 'rgba(37, 99, 235, 0.86)'};
+  color: white;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 900;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.3);
+`;
+
+const CardBody = styled.div`
+  min-width: 0;
+  padding: 18px;
+  display: grid;
+  align-content: start;
+  gap: 14px;
+`;
+
+const CardHeader = styled.div`
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    flex-direction: column;
+  }
+`;
+
+const PostTitle = styled.h2`
+  margin: 0;
+  font-size: 25px;
+  letter-spacing: -0.055em;
+`;
+
+const Meta = styled.div`
+  margin-top: 5px;
+  color: ${({ theme }) => theme.colors.textMuted};
+  font-size: 13px;
+  font-weight: 700;
+`;
+
+const MediaBadge = styled.div`
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid rgba(124, 58, 237, 0.32);
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: rgba(124, 58, 237, 0.1);
+  color: #ddd6fe;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 900;
+`;
+
+const Description = styled.p`
+  margin: 0;
+  color: ${({ theme }) => theme.colors.textMuted};
+  line-height: 1.6;
+`;
+
+const Metrics = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+`;
+
+const Metric = styled.div`
+  min-height: 36px;
+  padding: 0 11px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: rgba(255, 255, 255, 0.04);
+  color: ${({ theme }) => theme.colors.text};
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 900;
+
+  svg {
+    color: ${({ theme }) => theme.colors.primaryHover};
+  }
+`;
+
+const InfoList = styled.div`
+  display: grid;
+  gap: 8px;
+`;
+
+const InfoItem = styled.div`
+  padding: 10px 12px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+
+  strong {
+    color: ${({ theme }) => theme.colors.text};
+    font-size: 13px;
+  }
+
+  span {
+    min-width: 0;
+    color: ${({ theme }) => theme.colors.textMuted};
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 700;
+    text-align: right;
+    word-break: break-word;
+  }
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+
+    span {
+      text-align: left;
+    }
+  }
+`;
+
+const Actions = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+`;
+
+const DeleteButton = styled.button`
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid rgba(239, 68, 68, 0.32);
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: rgba(239, 68, 68, 0.12);
+  color: #fecaca;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 900;
+
+  &:hover {
+    background: rgba(239, 68, 68, 0.18);
+  }
+`;
+
+const EmptyCard = styled.section`
+  min-height: 420px;
+  padding: 30px 22px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background:
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.2), transparent 34%),
+    rgba(21, 25, 43, 0.86);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+
+  > svg {
+    margin-bottom: 16px;
+    color: ${({ theme }) => theme.colors.primaryHover};
+    font-size: 44px;
+  }
+
+  h2 {
+    margin: 0 0 10px;
+    font-size: clamp(26px, 4vw, 40px);
+    letter-spacing: -0.06em;
+  }
+
+  p {
+    max-width: 500px;
+    margin: 0;
+    color: ${({ theme }) => theme.colors.textMuted};
+    line-height: 1.6;
+  }
+`;
+
+const EmptyButton = styled.button`
+  min-height: 46px;
+  margin-top: 22px;
+  padding: 0 16px;
+  border: none;
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  color: white;
+  font-weight: 900;
+
+  &:hover {
+    filter: brightness(1.08);
+  }
+`;

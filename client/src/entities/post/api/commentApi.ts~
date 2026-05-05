@@ -1,0 +1,427 @@
+import { baseApi } from '../../../shared/api/baseApi';
+import type {
+    CommentsResponse,
+    CreateCommentDto,
+    PostComment,
+} from '../model/commentTypes';
+import type { Post } from '../model/postTypes';
+
+type NotificationType =
+    | 'REQUEST_APPROVED'
+    | 'REQUEST_REJECTED'
+    | 'NEW_LIKE'
+    | 'NEW_COMMENT';
+
+interface MockUser {
+    id: number;
+    nickname: string;
+    email: string;
+    avatarUrl?: string | null;
+    role: 'USER' | 'ADMIN';
+    hasPremium: boolean;
+    password: string;
+}
+
+interface MockNotification {
+    id: number;
+    userId: number;
+    type: NotificationType;
+    title: string;
+    text: string;
+    isRead: boolean;
+    postId?: number | null;
+    requestId?: number | null;
+    createdAt: string;
+}
+
+const USE_MOCK_COMMENTS = import.meta.env.VITE_USE_MOCK_COMMENTS !== 'false';
+
+const MOCK_COMMENTS_KEY = 'pulsefeed_mock_comments';
+const MOCK_USERS_KEY = 'pulsefeed_mock_users';
+const MOCK_POSTS_KEY = 'pulsefeed_mock_posts';
+const MOCK_NOTIFICATIONS_KEY = 'pulsefeed_mock_notifications';
+
+function delay(ms = 250) {
+    return new Promise((resolve) => {
+        window.setTimeout(resolve, ms);
+    });
+}
+
+function createMockError(status: number, message: string) {
+    return {
+        status,
+        data: {
+            message,
+        },
+    };
+}
+
+function getCurrentUserId() {
+    const token = localStorage.getItem('accessToken');
+
+    if (!token?.startsWith('mock-access-token-')) {
+        return null;
+    }
+
+    const rawId = token.replace('mock-access-token-', '');
+    const userId = Number(rawId);
+
+    return Number.isNaN(userId) ? null : userId;
+}
+
+function getMockUsers(): MockUser[] {
+    const savedUsers = localStorage.getItem(MOCK_USERS_KEY);
+
+    if (!savedUsers) {
+        return [];
+    }
+
+    try {
+        return JSON.parse(savedUsers) as MockUser[];
+    } catch {
+        localStorage.removeItem(MOCK_USERS_KEY);
+        return [];
+    }
+}
+
+function getCurrentMockUser(): MockUser | null {
+    const userId = getCurrentUserId();
+
+    if (!userId) {
+        return null;
+    }
+
+    const users = getMockUsers();
+
+    return users.find((user) => user.id === userId) || null;
+}
+
+function getMockComments(): PostComment[] {
+    const savedComments = localStorage.getItem(MOCK_COMMENTS_KEY);
+
+    if (!savedComments) {
+        return [];
+    }
+
+    try {
+        return JSON.parse(savedComments) as PostComment[];
+    } catch {
+        localStorage.removeItem(MOCK_COMMENTS_KEY);
+        return [];
+    }
+}
+
+function saveMockComments(comments: PostComment[]) {
+    localStorage.setItem(MOCK_COMMENTS_KEY, JSON.stringify(comments));
+}
+
+function getMockPosts(): Post[] {
+    const savedPosts = localStorage.getItem(MOCK_POSTS_KEY);
+
+    if (!savedPosts) {
+        return [];
+    }
+
+    try {
+        return JSON.parse(savedPosts) as Post[];
+    } catch {
+        localStorage.removeItem(MOCK_POSTS_KEY);
+        return [];
+    }
+}
+
+function saveMockPosts(posts: Post[]) {
+    localStorage.setItem(MOCK_POSTS_KEY, JSON.stringify(posts));
+}
+
+function getMockNotifications(): MockNotification[] {
+    const savedNotifications = localStorage.getItem(MOCK_NOTIFICATIONS_KEY);
+
+    if (!savedNotifications) {
+        return [];
+    }
+
+    try {
+        return JSON.parse(savedNotifications) as MockNotification[];
+    } catch {
+        localStorage.removeItem(MOCK_NOTIFICATIONS_KEY);
+        return [];
+    }
+}
+
+function saveMockNotifications(notifications: MockNotification[]) {
+    localStorage.setItem(MOCK_NOTIFICATIONS_KEY, JSON.stringify(notifications));
+}
+
+function incrementPostCommentsCount(postId: number) {
+    const posts = getMockPosts();
+
+    const updatedPosts = posts.map((post) =>
+        post.id === postId
+            ? {
+                ...post,
+                commentsCount: post.commentsCount + 1,
+            }
+            : post
+    );
+
+    saveMockPosts(updatedPosts);
+}
+
+function decrementPostCommentsCount(postId: number) {
+    const posts = getMockPosts();
+
+    const updatedPosts = posts.map((post) =>
+        post.id === postId
+            ? {
+                ...post,
+                commentsCount: Math.max(post.commentsCount - 1, 0),
+            }
+            : post
+    );
+
+    saveMockPosts(updatedPosts);
+}
+
+function createCommentNotification(postId: number, commenter: MockUser) {
+    const posts = getMockPosts();
+    const post = posts.find((item) => item.id === postId);
+
+    if (!post) {
+        return;
+    }
+
+    if (post.author.id === commenter.id) {
+        return;
+    }
+
+    const notifications = getMockNotifications();
+
+    const newNotification: MockNotification = {
+        id: Date.now() + Math.floor(Math.random() * 1000),
+        userId: post.author.id,
+        type: 'NEW_COMMENT',
+        title: 'Новый комментарий',
+        text: `@${commenter.nickname} оставил комментарий к вашей публикации «${
+            post.title || 'Без названия'
+        }».`,
+        isRead: false,
+        postId: post.id,
+        requestId: null,
+        createdAt: new Date().toISOString(),
+    };
+
+    saveMockNotifications([newNotification, ...notifications]);
+}
+
+export const commentApi = baseApi.injectEndpoints({
+    endpoints: (builder) => ({
+        getPostComments: builder.query<CommentsResponse, number>({
+            async queryFn(postId, _api, _extraOptions, baseQuery) {
+                if (!USE_MOCK_COMMENTS) {
+                    const result = await baseQuery(`/posts/${postId}/comments`);
+
+                    if (result.error) {
+                        return {
+                            error: result.error,
+                        };
+                    }
+
+                    return {
+                        data: result.data as CommentsResponse,
+                    };
+                }
+
+                await delay();
+
+                const comments = getMockComments()
+                    .filter((comment) => comment.postId === postId)
+                    .sort(
+                        (a, b) =>
+                            new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+                    );
+
+                return {
+                    data: {
+                        comments,
+                        total: comments.length,
+                    },
+                };
+            },
+            providesTags: (_result, _error, postId) => [
+                {
+                    type: 'Comment',
+                    id: postId,
+                },
+            ],
+        }),
+
+        createComment: builder.mutation<PostComment, CreateCommentDto>({
+            async queryFn(body, _api, _extraOptions, baseQuery) {
+                if (!USE_MOCK_COMMENTS) {
+                    const result = await baseQuery({
+                        url: `/posts/${body.postId}/comments`,
+                        method: 'POST',
+                        body: {
+                            text: body.text,
+                        },
+                    });
+
+                    if (result.error) {
+                        return {
+                            error: result.error,
+                        };
+                    }
+
+                    return {
+                        data: result.data as PostComment,
+                    };
+                }
+
+                await delay();
+
+                const user = getCurrentMockUser();
+
+                if (!user) {
+                    return {
+                        error: createMockError(401, 'Чтобы написать комментарий, нужно войти.'),
+                    };
+                }
+
+                const normalizedText = body.text.trim();
+
+                if (normalizedText.length < 2) {
+                    return {
+                        error: createMockError(
+                            400,
+                            'Комментарий должен содержать минимум 2 символа.'
+                        ),
+                    };
+                }
+
+                if (normalizedText.length > 600) {
+                    return {
+                        error: createMockError(
+                            400,
+                            'Комментарий не должен быть длиннее 600 символов.'
+                        ),
+                    };
+                }
+
+                const newComment: PostComment = {
+                    id: Date.now(),
+                    postId: body.postId,
+                    author: {
+                        id: user.id,
+                        nickname: user.nickname,
+                        avatarUrl: user.avatarUrl,
+                    },
+                    text: normalizedText,
+                    createdAt: new Date().toISOString(),
+                    updatedAt: null,
+                };
+
+                const currentComments = getMockComments();
+
+                saveMockComments([...currentComments, newComment]);
+                incrementPostCommentsCount(body.postId);
+                createCommentNotification(body.postId, user);
+
+                return {
+                    data: newComment,
+                };
+            },
+            invalidatesTags: (_result, _error, body) => [
+                {
+                    type: 'Comment',
+                    id: body.postId,
+                },
+                'Post',
+            ],
+        }),
+
+        deleteComment: builder.mutation<
+            { message: string },
+            { postId: number; commentId: number }
+        >({
+            async queryFn({ postId, commentId }, _api, _extraOptions, baseQuery) {
+                if (!USE_MOCK_COMMENTS) {
+                    const result = await baseQuery({
+                        url: `/posts/${postId}/comments/${commentId}`,
+                        method: 'DELETE',
+                    });
+
+                    if (result.error) {
+                        return {
+                            error: result.error,
+                        };
+                    }
+
+                    return {
+                        data: result.data as { message: string },
+                    };
+                }
+
+                await delay();
+
+                const user = getCurrentMockUser();
+
+                if (!user) {
+                    return {
+                        error: createMockError(401, 'Чтобы удалить комментарий, нужно войти.'),
+                    };
+                }
+
+                const comments = getMockComments();
+
+                const targetComment = comments.find(
+                    (comment) => comment.id === commentId && comment.postId === postId
+                );
+
+                if (!targetComment) {
+                    return {
+                        error: createMockError(404, 'Комментарий не найден.'),
+                    };
+                }
+
+                const canDelete =
+                    targetComment.author.id === user.id || user.role === 'ADMIN';
+
+                if (!canDelete) {
+                    return {
+                        error: createMockError(
+                            403,
+                            'Можно удалить только свой комментарий или комментарий как админ.'
+                        ),
+                    };
+                }
+
+                const updatedComments = comments.filter(
+                    (comment) => comment.id !== commentId
+                );
+
+                saveMockComments(updatedComments);
+                decrementPostCommentsCount(postId);
+
+                return {
+                    data: {
+                        message: 'Комментарий удален.',
+                    },
+                };
+            },
+            invalidatesTags: (_result, _error, arg) => [
+                {
+                    type: 'Comment',
+                    id: arg.postId,
+                },
+                'Post',
+            ],
+        }),
+    }),
+});
+
+export const {
+    useGetPostCommentsQuery,
+    useCreateCommentMutation,
+    useDeleteCommentMutation,
+} = commentApi;

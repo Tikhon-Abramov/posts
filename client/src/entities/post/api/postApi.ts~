@@ -1,0 +1,735 @@
+import { baseApi } from '../../../shared/api/baseApi';
+import type { Post } from '../model/postTypes';
+
+interface FeedParams {
+  type?: 'public' | 'premium';
+  page?: number;
+  limit?: number;
+}
+
+interface FeedResponse {
+  posts: Post[];
+  page: number;
+  totalPages: number;
+}
+
+type MockReaction = 'like' | 'dislike' | null;
+
+type NotificationType =
+    | 'REQUEST_APPROVED'
+    | 'REQUEST_REJECTED'
+    | 'NEW_LIKE'
+    | 'NEW_COMMENT';
+
+interface MockPostInteraction {
+  reaction: MockReaction;
+  saved: boolean;
+}
+
+type MockPostInteractions = Record<string, Record<string, MockPostInteraction>>;
+
+interface MockUser {
+  id: number;
+  nickname: string;
+  email: string;
+  avatarUrl?: string | null;
+  role: 'USER' | 'ADMIN';
+  hasPremium: boolean;
+}
+
+interface MockNotification {
+  id: number;
+  userId: number;
+  type: NotificationType;
+  title: string;
+  text: string;
+  isRead: boolean;
+  postId?: number | null;
+  requestId?: number | null;
+  createdAt: string;
+}
+
+const USE_MOCK_POSTS = import.meta.env.VITE_USE_MOCK_POSTS !== 'false';
+
+const MOCK_POSTS_KEY = 'pulsefeed_mock_posts';
+const MOCK_POST_INTERACTIONS_KEY = 'pulsefeed_mock_post_interactions';
+const MOCK_USERS_KEY = 'pulsefeed_mock_users';
+const MOCK_NOTIFICATIONS_KEY = 'pulsefeed_mock_notifications';
+
+const DEFAULT_MOCK_POSTS: Post[] = [
+  {
+    id: 1,
+    title: 'Неоновый вечер',
+    description:
+        'Обычный публичный пост. Его видят все пользователи, даже без авторизации.',
+    visibility: 'PUBLIC',
+    media: [
+      {
+        id: 1,
+        type: 'IMAGE',
+        url: createMockImageUrl('Неоновый вечер', '#7c3aed', '#2563eb'),
+      },
+    ],
+    author: {
+      id: 1,
+      nickname: 'admin',
+      avatarUrl: null,
+    },
+    likesCount: 34,
+    dislikesCount: 2,
+    commentsCount: 8,
+    isLikedByMe: false,
+    isDislikedByMe: false,
+    isSavedByMe: false,
+    createdAt: new Date(Date.now() - 1000 * 60 * 40).toISOString(),
+  },
+  {
+    id: 2,
+    title: 'Город после дождя',
+    description:
+        'Пост с фото в ленте. Позже backend будет отдавать настоящие загруженные файлы.',
+    visibility: 'PUBLIC',
+    media: [
+      {
+        id: 2,
+        type: 'IMAGE',
+        url: createMockImageUrl('Город после дождя', '#1d4ed8', '#ef4444'),
+      },
+    ],
+    author: {
+      id: 1,
+      nickname: 'admin',
+      avatarUrl: null,
+    },
+    likesCount: 58,
+    dislikesCount: 4,
+    commentsCount: 14,
+    isLikedByMe: false,
+    isDislikedByMe: false,
+    isSavedByMe: false,
+    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 4).toISOString(),
+  },
+  {
+    id: 3,
+    title: 'Premium: закрытый фотосет',
+    description:
+        'Этот пост должен быть виден только пользователям с активной подпиской.',
+    visibility: 'PREMIUM',
+    media: [
+      {
+        id: 3,
+        type: 'IMAGE',
+        url: createMockImageUrl('Premium фотосет', '#ec4899', '#7c3aed'),
+      },
+    ],
+    author: {
+      id: 1,
+      nickname: 'admin',
+      avatarUrl: null,
+    },
+    likesCount: 112,
+    dislikesCount: 3,
+    commentsCount: 27,
+    isLikedByMe: false,
+    isDislikedByMe: false,
+    isSavedByMe: false,
+    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 9).toISOString(),
+  },
+  {
+    id: 4,
+    title: 'Premium: видео-превью',
+    description:
+        'Временный видео-пост для проверки отображения video-контента на фронте.',
+    visibility: 'PREMIUM',
+    media: [
+      {
+        id: 4,
+        type: 'VIDEO',
+        url: 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
+      },
+    ],
+    author: {
+      id: 1,
+      nickname: 'admin',
+      avatarUrl: null,
+    },
+    likesCount: 86,
+    dislikesCount: 1,
+    commentsCount: 19,
+    isLikedByMe: false,
+    isDislikedByMe: false,
+    isSavedByMe: false,
+    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 16).toISOString(),
+  },
+  {
+    id: 5,
+    title: 'Красный акцент',
+    description:
+        'Еще один публичный пост для проверки ленты, лайков, дизлайков и сохранений.',
+    visibility: 'PUBLIC',
+    media: [
+      {
+        id: 5,
+        type: 'IMAGE',
+        url: createMockImageUrl('Красный акцент', '#ef4444', '#111827'),
+      },
+    ],
+    author: {
+      id: 1,
+      nickname: 'admin',
+      avatarUrl: null,
+    },
+    likesCount: 21,
+    dislikesCount: 0,
+    commentsCount: 3,
+    isLikedByMe: false,
+    isDislikedByMe: false,
+    isSavedByMe: false,
+    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString(),
+  },
+];
+
+function delay(ms = 300) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function createMockImageUrl(title: string, colorA: string, colorB: string) {
+  const svg = `
+    <svg width="1200" height="900" viewBox="0 0 1200 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect width="1200" height="900" fill="#080A12"/>
+      <circle cx="220" cy="160" r="360" fill="${colorA}" opacity="0.55"/>
+      <circle cx="980" cy="720" r="420" fill="${colorB}" opacity="0.5"/>
+      <circle cx="860" cy="180" r="220" fill="#7c3aed" opacity="0.28"/>
+      <rect x="90" y="90" width="1020" height="720" rx="52" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.18)" stroke-width="2"/>
+      <text x="120" y="445" fill="white" font-family="Inter, Arial, sans-serif" font-size="76" font-weight="900" letter-spacing="-4">${escapeSvgText(title)}</text>
+      <text x="124" y="510" fill="rgba(255,255,255,0.72)" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">PulseFeed mock content</text>
+    </svg>
+  `;
+
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+function escapeSvgText(text: string) {
+  return text
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;');
+}
+
+function getMockPosts(): Post[] {
+  const savedPosts = localStorage.getItem(MOCK_POSTS_KEY);
+
+  if (!savedPosts) {
+    localStorage.setItem(MOCK_POSTS_KEY, JSON.stringify(DEFAULT_MOCK_POSTS));
+    return DEFAULT_MOCK_POSTS;
+  }
+
+  try {
+    return JSON.parse(savedPosts) as Post[];
+  } catch {
+    localStorage.setItem(MOCK_POSTS_KEY, JSON.stringify(DEFAULT_MOCK_POSTS));
+    return DEFAULT_MOCK_POSTS;
+  }
+}
+
+function saveMockPosts(posts: Post[]) {
+  localStorage.setItem(MOCK_POSTS_KEY, JSON.stringify(posts));
+}
+
+function getMockInteractions(): MockPostInteractions {
+  const savedInteractions = localStorage.getItem(MOCK_POST_INTERACTIONS_KEY);
+
+  if (!savedInteractions) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(savedInteractions) as MockPostInteractions;
+  } catch {
+    localStorage.removeItem(MOCK_POST_INTERACTIONS_KEY);
+    return {};
+  }
+}
+
+function saveMockInteractions(interactions: MockPostInteractions) {
+  localStorage.setItem(MOCK_POST_INTERACTIONS_KEY, JSON.stringify(interactions));
+}
+
+function getMockNotifications(): MockNotification[] {
+  const savedNotifications = localStorage.getItem(MOCK_NOTIFICATIONS_KEY);
+
+  if (!savedNotifications) {
+    return [];
+  }
+
+  try {
+    return JSON.parse(savedNotifications) as MockNotification[];
+  } catch {
+    localStorage.removeItem(MOCK_NOTIFICATIONS_KEY);
+    return [];
+  }
+}
+
+function saveMockNotifications(notifications: MockNotification[]) {
+  localStorage.setItem(MOCK_NOTIFICATIONS_KEY, JSON.stringify(notifications));
+}
+
+function getCurrentUserId() {
+  const token = localStorage.getItem('accessToken');
+
+  if (!token?.startsWith('mock-access-token-')) {
+    return null;
+  }
+
+  const rawId = token.replace('mock-access-token-', '');
+  const userId = Number(rawId);
+
+  return Number.isNaN(userId) ? null : userId;
+}
+
+function getCurrentMockUser(): MockUser | null {
+  const userId = getCurrentUserId();
+
+  if (!userId) {
+    return null;
+  }
+
+  const savedUsers = localStorage.getItem(MOCK_USERS_KEY);
+
+  if (!savedUsers) {
+    return null;
+  }
+
+  try {
+    const users = JSON.parse(savedUsers) as MockUser[];
+    return users.find((user) => user.id === userId) || null;
+  } catch {
+    return null;
+  }
+}
+
+function getUserInteraction(
+    interactions: MockPostInteractions,
+    userId: number,
+    postId: number
+): MockPostInteraction {
+  return (
+      interactions[String(userId)]?.[String(postId)] || {
+        reaction: null,
+        saved: false,
+      }
+  );
+}
+
+function setUserInteraction(
+    interactions: MockPostInteractions,
+    userId: number,
+    postId: number,
+    interaction: MockPostInteraction
+) {
+  const userKey = String(userId);
+  const postKey = String(postId);
+
+  return {
+    ...interactions,
+    [userKey]: {
+      ...(interactions[userKey] || {}),
+      [postKey]: interaction,
+    },
+  };
+}
+
+function applyUserStateToPosts(posts: Post[]) {
+  const userId = getCurrentUserId();
+
+  if (!userId) {
+    return posts.map((post) => ({
+      ...post,
+      isLikedByMe: false,
+      isDislikedByMe: false,
+      isSavedByMe: false,
+    }));
+  }
+
+  const interactions = getMockInteractions();
+
+  return posts.map((post) => {
+    const interaction = getUserInteraction(interactions, userId, post.id);
+
+    return {
+      ...post,
+      isLikedByMe: interaction.reaction === 'like',
+      isDislikedByMe: interaction.reaction === 'dislike',
+      isSavedByMe: interaction.saved,
+    };
+  });
+}
+
+function paginatePosts(posts: Post[], page = 1, limit = 10): FeedResponse {
+  const normalizedPage = Math.max(page, 1);
+  const normalizedLimit = Math.max(limit, 1);
+  const start = (normalizedPage - 1) * normalizedLimit;
+  const end = start + normalizedLimit;
+
+  return {
+    posts: posts.slice(start, end),
+    page: normalizedPage,
+    totalPages: Math.max(Math.ceil(posts.length / normalizedLimit), 1),
+  };
+}
+
+function createMockError(status: number, message: string) {
+  return {
+    status,
+    data: {
+      message,
+    },
+  };
+}
+
+function requireMockAuth() {
+  const user = getCurrentMockUser();
+
+  if (!user) {
+    return {
+      error: createMockError(401, 'Нужно войти в аккаунт.'),
+      user: null,
+    };
+  }
+
+  return {
+    error: null,
+    user,
+  };
+}
+
+function createLikeNotification(post: Post, liker: MockUser) {
+  if (post.author.id === liker.id) {
+    return;
+  }
+
+  const notifications = getMockNotifications();
+
+  const newNotification: MockNotification = {
+    id: Date.now() + Math.floor(Math.random() * 1000),
+    userId: post.author.id,
+    type: 'NEW_LIKE',
+    title: 'Новый лайк',
+    text: `@${liker.nickname} поставил лайк вашей публикации «${
+        post.title || 'Без названия'
+    }».`,
+    isRead: false,
+    postId: post.id,
+    requestId: null,
+    createdAt: new Date().toISOString(),
+  };
+
+  saveMockNotifications([newNotification, ...notifications]);
+}
+
+function updatePostReaction(postId: number, nextReaction: Exclude<MockReaction, null>) {
+  const auth = requireMockAuth();
+
+  if (auth.error || !auth.user) {
+    return {
+      error: auth.error,
+    };
+  }
+
+  const userId = auth.user.id;
+  const posts = getMockPosts();
+  const interactions = getMockInteractions();
+
+  const currentInteraction = getUserInteraction(interactions, userId, postId);
+  const currentReaction = currentInteraction.reaction;
+
+  const shouldCreateLikeNotification =
+      nextReaction === 'like' && currentReaction !== 'like';
+
+  const targetPost = posts.find((post) => post.id === postId);
+
+  const updatedPosts = posts.map((post) => {
+    if (post.id !== postId) {
+      return post;
+    }
+
+    let likesCount = post.likesCount;
+    let dislikesCount = post.dislikesCount;
+
+    if (currentReaction === nextReaction) {
+      if (nextReaction === 'like') {
+        likesCount = Math.max(likesCount - 1, 0);
+      } else {
+        dislikesCount = Math.max(dislikesCount - 1, 0);
+      }
+    } else {
+      if (currentReaction === 'like') {
+        likesCount = Math.max(likesCount - 1, 0);
+      }
+
+      if (currentReaction === 'dislike') {
+        dislikesCount = Math.max(dislikesCount - 1, 0);
+      }
+
+      if (nextReaction === 'like') {
+        likesCount += 1;
+      } else {
+        dislikesCount += 1;
+      }
+    }
+
+    return {
+      ...post,
+      likesCount,
+      dislikesCount,
+    };
+  });
+
+  const nextInteraction: MockPostInteraction = {
+    ...currentInteraction,
+    reaction: currentReaction === nextReaction ? null : nextReaction,
+  };
+
+  const updatedInteractions = setUserInteraction(
+      interactions,
+      userId,
+      postId,
+      nextInteraction
+  );
+
+  saveMockPosts(updatedPosts);
+  saveMockInteractions(updatedInteractions);
+
+  if (targetPost && shouldCreateLikeNotification) {
+    createLikeNotification(targetPost, auth.user);
+  }
+
+  return {
+    data: {
+      message: nextReaction === 'like' ? 'Лайк обновлен.' : 'Дизлайк обновлен.',
+    },
+  };
+}
+
+function updatePostSaved(postId: number, saved: boolean) {
+  const auth = requireMockAuth();
+
+  if (auth.error || !auth.user) {
+    return {
+      error: auth.error,
+    };
+  }
+
+  const userId = auth.user.id;
+  const interactions = getMockInteractions();
+  const currentInteraction = getUserInteraction(interactions, userId, postId);
+
+  const nextInteraction: MockPostInteraction = {
+    ...currentInteraction,
+    saved,
+  };
+
+  const updatedInteractions = setUserInteraction(
+      interactions,
+      userId,
+      postId,
+      nextInteraction
+  );
+
+  saveMockInteractions(updatedInteractions);
+
+  return {
+    data: {
+      message: saved ? 'Пост сохранен.' : 'Пост удален из сохраненных.',
+    },
+  };
+}
+
+export const postApi = baseApi.injectEndpoints({
+  endpoints: (builder) => ({
+    getFeed: builder.query<FeedResponse, FeedParams>({
+      async queryFn(
+          { type = 'public', page = 1, limit = 10 },
+          _api,
+          _extraOptions,
+          baseQuery
+      ) {
+        if (!USE_MOCK_POSTS) {
+          const result = await baseQuery({
+            url: '/posts/feed',
+            params: { type, page, limit },
+          });
+
+          if (result.error) {
+            return { error: result.error };
+          }
+
+          return { data: result.data as FeedResponse };
+        }
+
+        await delay();
+
+        const posts = getMockPosts();
+        const postsWithUserState = applyUserStateToPosts(posts);
+
+        const filteredPosts = postsWithUserState
+            .filter((post) =>
+                type === 'premium'
+                    ? post.visibility === 'PREMIUM'
+                    : post.visibility === 'PUBLIC'
+            )
+            .sort(
+                (a, b) =>
+                    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+            );
+
+        return {
+          data: paginatePosts(filteredPosts, page, limit),
+        };
+      },
+      providesTags: ['Post'],
+    }),
+
+    getSavedPosts: builder.query<FeedResponse, { page?: number; limit?: number }>({
+      async queryFn({ page = 1, limit = 10 }, _api, _extraOptions, baseQuery) {
+        if (!USE_MOCK_POSTS) {
+          const result = await baseQuery({
+            url: '/posts/saved',
+            params: { page, limit },
+          });
+
+          if (result.error) {
+            return { error: result.error };
+          }
+
+          return { data: result.data as FeedResponse };
+        }
+
+        await delay();
+
+        const auth = requireMockAuth();
+
+        if (auth.error || !auth.user) {
+          return {
+            error: auth.error,
+          };
+        }
+
+        const posts = getMockPosts();
+        const postsWithUserState = applyUserStateToPosts(posts);
+
+        const savedPosts = postsWithUserState
+            .filter((post) => post.isSavedByMe)
+            .sort(
+                (a, b) =>
+                    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+            );
+
+        return {
+          data: paginatePosts(savedPosts, page, limit),
+        };
+      },
+      providesTags: ['Post'],
+    }),
+
+    likePost: builder.mutation<{ message: string }, number>({
+      async queryFn(postId, _api, _extraOptions, baseQuery) {
+        if (!USE_MOCK_POSTS) {
+          const result = await baseQuery({
+            url: `/posts/${postId}/like`,
+            method: 'POST',
+          });
+
+          if (result.error) {
+            return { error: result.error };
+          }
+
+          return { data: result.data as { message: string } };
+        }
+
+        await delay(180);
+
+        return updatePostReaction(postId, 'like');
+      },
+      invalidatesTags: ['Post'],
+    }),
+
+    dislikePost: builder.mutation<{ message: string }, number>({
+      async queryFn(postId, _api, _extraOptions, baseQuery) {
+        if (!USE_MOCK_POSTS) {
+          const result = await baseQuery({
+            url: `/posts/${postId}/dislike`,
+            method: 'POST',
+          });
+
+          if (result.error) {
+            return { error: result.error };
+          }
+
+          return { data: result.data as { message: string } };
+        }
+
+        await delay(180);
+
+        return updatePostReaction(postId, 'dislike');
+      },
+      invalidatesTags: ['Post'],
+    }),
+
+    savePost: builder.mutation<{ message: string }, number>({
+      async queryFn(postId, _api, _extraOptions, baseQuery) {
+        if (!USE_MOCK_POSTS) {
+          const result = await baseQuery({
+            url: `/posts/${postId}/save`,
+            method: 'POST',
+          });
+
+          if (result.error) {
+            return { error: result.error };
+          }
+
+          return { data: result.data as { message: string } };
+        }
+
+        await delay(180);
+
+        return updatePostSaved(postId, true);
+      },
+      invalidatesTags: ['Post'],
+    }),
+
+    unsavePost: builder.mutation<{ message: string }, number>({
+      async queryFn(postId, _api, _extraOptions, baseQuery) {
+        if (!USE_MOCK_POSTS) {
+          const result = await baseQuery({
+            url: `/posts/${postId}/save`,
+            method: 'DELETE',
+          });
+
+          if (result.error) {
+            return { error: result.error };
+          }
+
+          return { data: result.data as { message: string } };
+        }
+
+        await delay(180);
+
+        return updatePostSaved(postId, false);
+      },
+      invalidatesTags: ['Post'],
+    }),
+  }),
+});
+
+export const {
+  useGetFeedQuery,
+  useGetSavedPostsQuery,
+  useLikePostMutation,
+  useDislikePostMutation,
+  useSavePostMutation,
+  useUnsavePostMutation,
+} = postApi;

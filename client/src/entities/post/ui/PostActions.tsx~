@@ -1,0 +1,106 @@
+import styled from 'styled-components';
+import { FiBookmark, FiHeart, FiThumbsDown } from 'react-icons/fi';
+import type { Post } from '../model/postTypes';
+import {
+  useDislikePostMutation,
+  useLikePostMutation,
+  useSavePostMutation,
+  useUnsavePostMutation,
+} from '../api/postApi';
+
+interface PostActionsProps {
+  post: Post;
+}
+
+export function PostActions({ post }: PostActionsProps) {
+  const [likePost, { isLoading: isLikeLoading }] = useLikePostMutation();
+  const [dislikePost, { isLoading: isDislikeLoading }] = useDislikePostMutation();
+  const [savePost, { isLoading: isSaveLoading }] = useSavePostMutation();
+  const [unsavePost, { isLoading: isUnsaveLoading }] = useUnsavePostMutation();
+
+  const handleSave = () => {
+    if (post.isSavedByMe) {
+      unsavePost(post.id);
+    } else {
+      savePost(post.id);
+    }
+  };
+
+  return (
+    <Actions>
+      <LeftActions>
+        <ActionButton
+          $active={post.isLikedByMe}
+          disabled={isLikeLoading}
+          onClick={() => likePost(post.id)}
+          type="button"
+        >
+          <FiHeart />
+          <span>{post.likesCount}</span>
+        </ActionButton>
+
+        <ActionButton
+          $active={post.isDislikedByMe}
+          disabled={isDislikeLoading}
+          onClick={() => dislikePost(post.id)}
+          type="button"
+        >
+          <FiThumbsDown />
+          <span>{post.dislikesCount}</span>
+        </ActionButton>
+      </LeftActions>
+
+      <ActionButton
+        $active={post.isSavedByMe}
+        disabled={isSaveLoading || isUnsaveLoading}
+        onClick={handleSave}
+        type="button"
+      >
+        <FiBookmark />
+        <span>{post.isSavedByMe ? 'Сохранено' : 'Сохранить'}</span>
+      </ActionButton>
+    </Actions>
+  );
+}
+
+const Actions = styled.div`
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    align-items: stretch;
+    flex-direction: column;
+  }
+`;
+
+const LeftActions = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+`;
+
+const ActionButton = styled.button<{ $active?: boolean }>`
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid
+    ${({ theme, $active }) => ($active ? theme.colors.primary : theme.colors.border)};
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: ${({ $active }) =>
+    $active
+      ? 'linear-gradient(135deg, rgba(124,58,237,0.32), rgba(37,99,235,0.24))'
+      : 'rgba(255,255,255,0.035)'};
+  color: ${({ theme }) => theme.colors.text};
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-weight: 700;
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+`;
