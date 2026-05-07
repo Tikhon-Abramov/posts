@@ -1,243 +1,245 @@
-import {  useEffect, useMemo, useState } from 'react';
-import type { FormEvent } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import type { FormEvent, MouseEvent } from 'react';
 import { FiLock, FiMail, FiUser, FiX } from 'react-icons/fi';
 import { useDispatch, useSelector } from 'react-redux';
 import styled, { keyframes } from 'styled-components';
 
 import type { AppDispatch, RootState } from '../../app/store';
 import {
-    closeAuthModal,
-    setCredentials,
-    switchAuthModalMode,
+  closeAuthModal,
+  setCredentials,
+  switchAuthModalMode,
 } from '../../entities/auth/slice/authSlice';
 import {
-    useLoginMutation,
-    useRegisterMutation,
+  useLoginMutation,
+  useRegisterMutation,
 } from '../../entities/auth/api/authApi';
 
 export function AuthModal() {
-    const dispatch = useDispatch<AppDispatch>();
+  const dispatch = useDispatch<AppDispatch>();
 
-    const { isOpen, mode, reason } = useSelector(
-        (state: RootState) => state.auth.authModal
-    );
+  const { isOpen, mode, reason } = useSelector(
+    (state: RootState) => state.auth.authModal
+  );
 
-    const [loginUser, loginState] = useLoginMutation();
-    const [registerUser, registerState] = useRegisterMutation();
+  const [loginUser, loginState] = useLoginMutation();
+  const [registerUser, registerState] = useRegisterMutation();
 
-    const [nickname, setNickname] = useState('');
-    const [email, setEmail] = useState('');
-    const [password, setPassword] = useState('');
+  const [nickname, setNickname] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
 
-    const isLogin = mode === 'login';
-    const isLoading = loginState.isLoading || registerState.isLoading;
+  const isLogin = mode === 'login';
+  const isLoading = loginState.isLoading || registerState.isLoading;
 
-    const title = isLogin ? 'Вход в аккаунт' : 'Создание аккаунта';
+  const title = isLogin ? 'Вход в аккаунт' : 'Создание аккаунта';
 
-    const subtitle = isLogin
-        ? 'Войди, чтобы лайкать, комментировать, сохранять посты и открывать личные разделы.'
-        : 'Создай аккаунт, чтобы получить доступ ко всем возможностям сайта.';
+  const subtitle = isLogin
+    ? 'Войди, чтобы лайкать, комментировать, сохранять посты и открывать личные разделы.'
+    : 'Создай аккаунт, чтобы получить доступ ко всем возможностям сайта.';
 
-    const buttonText = isLogin ? 'Войти' : 'Создать аккаунт';
+  const buttonText = isLogin ? 'Войти' : 'Создать аккаунт';
 
-    const errorMessage = useMemo(() => {
-        const error = loginState.error || registerState.error;
+  const errorMessage = useMemo(() => {
+    const error = loginState.error || registerState.error;
 
-        if (!error) {
-            return null;
-        }
-
-        if ('data' in error) {
-            const data = error.data as {
-                message?: string;
-                error?: string;
-            };
-
-            return data?.message || data?.error || 'Не удалось выполнить запрос.';
-        }
-
-        return 'Ошибка соединения с сервером.';
-    }, [loginState.error, registerState.error]);
-
-    useEffect(() => {
-        if (!isOpen) {
-            return;
-        }
-
-        const handleKeyDown = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') {
-                dispatch(closeAuthModal());
-            }
-        };
-
-        document.body.style.overflow = 'hidden';
-        window.addEventListener('keydown', handleKeyDown);
-
-        return () => {
-            document.body.style.overflow = '';
-            window.removeEventListener('keydown', handleKeyDown);
-        };
-    }, [dispatch, isOpen]);
-
-    useEffect(() => {
-        if (!isOpen) {
-            setNickname('');
-            setEmail('');
-            setPassword('');
-        }
-    }, [isOpen]);
-
-    const handleClose = () => {
-        if (isLoading) {
-            return;
-        }
-
-        dispatch(closeAuthModal());
-    };
-
-    const handleOverlayClick = () => {
-        handleClose();
-    };
-
-    const handleModalClick = (event: React.MouseEvent<HTMLDivElement>) => {
-        event.stopPropagation();
-    };
-
-    const handleModeSwitch = () => {
-        if (isLoading) {
-            return;
-        }
-
-        dispatch(switchAuthModalMode(isLogin ? 'register' : 'login'));
-    };
-
-    const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-        event.preventDefault();
-
-        const normalizedEmail = email.trim().toLowerCase();
-        const normalizedNickname = nickname.trim();
-
-        if (!normalizedEmail || !password.trim()) {
-            return;
-        }
-
-        if (!isLogin && !normalizedNickname) {
-            return;
-        }
-
-        try {
-            const response = isLogin
-                ? await loginUser({
-                    email: normalizedEmail,
-                    password,
-                }).unwrap()
-                : await registerUser({
-                    nickname: normalizedNickname,
-                    email: normalizedEmail,
-                    password,
-                }).unwrap();
-
-            dispatch(setCredentials(response));
-        } catch {
-            /*
-              Ошибка уже отображается через errorMessage.
-              Здесь catch нужен, чтобы unwrap() не пробрасывал ошибку выше.
-            */
-        }
-    };
-
-    if (!isOpen) {
-        return null;
+    if (!error) {
+      return null;
     }
 
-    return (
-        <Overlay onClick={handleOverlayClick}>
-            <Modal onClick={handleModalClick}>
-                <CloseButton type="button" onClick={handleClose} aria-label="Закрыть">
-                    <FiX />
-                </CloseButton>
+    if ('data' in error) {
+      const data = error.data as {
+        message?: string;
+        error?: string;
+      };
 
-                <Visual>
-                    <Glow />
-                    <IconCircle>
-                        {isLogin ? <FiLock /> : <FiUser />}
-                    </IconCircle>
-                </Visual>
+      return data?.message || data?.error || 'Не удалось выполнить запрос.';
+    }
 
-                <Content>
-                    <Title>{title}</Title>
-                    <Subtitle>{subtitle}</Subtitle>
+    return 'Ошибка соединения с сервером.';
+  }, [loginState.error, registerState.error]);
 
-                    {reason && <Reason>{reason}</Reason>}
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
 
-                    <Form onSubmit={handleSubmit}>
-                        {!isLogin && (
-                            <Field>
-                                <Label htmlFor="auth-nickname">Ник</Label>
-                                <InputBox>
-                                    <FiUser />
-                                    <Input
-                                        id="auth-nickname"
-                                        type="text"
-                                        placeholder="Например, neon_user"
-                                        value={nickname}
-                                        disabled={isLoading}
-                                        autoComplete="nickname"
-                                        onChange={(event) => setNickname(event.target.value)}
-                                    />
-                                </InputBox>
-                            </Field>
-                        )}
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        dispatch(closeAuthModal());
+      }
+    };
 
-                        <Field>
-                            <Label htmlFor="auth-email">Почта</Label>
-                            <InputBox>
-                                <FiMail />
-                                <Input
-                                    id="auth-email"
-                                    type="email"
-                                    placeholder="you@example.com"
-                                    value={email}
-                                    disabled={isLoading}
-                                    autoComplete="email"
-                                    onChange={(event) => setEmail(event.target.value)}
-                                />
-                            </InputBox>
-                        </Field>
+    const previousBodyOverflow = document.body.style.overflow;
 
-                        <Field>
-                            <Label htmlFor="auth-password">Пароль</Label>
-                            <InputBox>
-                                <FiLock />
-                                <Input
-                                    id="auth-password"
-                                    type="password"
-                                    placeholder="Минимум 6 символов"
-                                    value={password}
-                                    disabled={isLoading}
-                                    autoComplete={isLogin ? 'current-password' : 'new-password'}
-                                    onChange={(event) => setPassword(event.target.value)}
-                                />
-                            </InputBox>
-                        </Field>
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', handleKeyDown);
 
-                        {errorMessage && <ErrorText>{errorMessage}</ErrorText>}
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [dispatch, isOpen]);
 
-                        <SubmitButton type="submit" disabled={isLoading}>
-                            {isLoading ? 'Подождите...' : buttonText}
-                        </SubmitButton>
-                    </Form>
+  useEffect(() => {
+    if (!isOpen) {
+      setNickname('');
+      setEmail('');
+      setPassword('');
+    }
+  }, [isOpen]);
 
-                    <SwitchText>
-                        {isLogin ? 'Еще нет аккаунта?' : 'Уже есть аккаунт?'}
-                        <button type="button" onClick={handleModeSwitch} disabled={isLoading}>
-                            {isLogin ? 'Создать аккаунт' : 'Войти'}
-                        </button>
-                    </SwitchText>
-                </Content>
-            </Modal>
-        </Overlay>
-    );
+  const handleClose = () => {
+    if (isLoading) {
+      return;
+    }
+
+    dispatch(closeAuthModal());
+  };
+
+  const handleOverlayClick = () => {
+    handleClose();
+  };
+
+  const handleModalClick = (event: MouseEvent<HTMLDivElement>) => {
+    event.stopPropagation();
+  };
+
+  const handleModeSwitch = () => {
+    if (isLoading) {
+      return;
+    }
+
+    dispatch(switchAuthModalMode(isLogin ? 'register' : 'login'));
+  };
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedNickname = nickname.trim();
+
+    if (!normalizedEmail || !password.trim()) {
+      return;
+    }
+
+    if (!isLogin && !normalizedNickname) {
+      return;
+    }
+
+    try {
+      const response = isLogin
+        ? await loginUser({
+            email: normalizedEmail,
+            password,
+          }).unwrap()
+        : await registerUser({
+            nickname: normalizedNickname,
+            email: normalizedEmail,
+            password,
+          }).unwrap();
+
+      dispatch(setCredentials(response));
+    } catch {
+      // Ошибка уже отображается через errorMessage.
+    }
+  };
+
+  if (!isOpen) {
+    return null;
+  }
+
+  return (
+    <Overlay onClick={handleOverlayClick}>
+      <Modal onClick={handleModalClick}>
+        <CloseButton type="button" disabled={isLoading} onClick={handleClose}>
+          <FiX />
+        </CloseButton>
+
+        <Visual>
+          <Glow />
+
+          <IconCircle>{isLogin ? <FiLock /> : <FiUser />}</IconCircle>
+        </Visual>
+
+        <Content>
+          <Title>{title}</Title>
+
+          <Subtitle>{subtitle}</Subtitle>
+
+          {reason && <Reason>{reason}</Reason>}
+
+          <Form onSubmit={handleSubmit}>
+            {!isLogin && (
+              <Field>
+                <Label>Ник</Label>
+
+                <InputBox>
+                  <FiUser />
+
+                  <Input
+                    value={nickname}
+                    minLength={3}
+                    maxLength={30}
+                    placeholder="Введите ник"
+                    disabled={isLoading}
+                    onChange={(event) => setNickname(event.target.value)}
+                  />
+                </InputBox>
+              </Field>
+            )}
+
+            <Field>
+              <Label>Почта</Label>
+
+              <InputBox>
+                <FiMail />
+
+                <Input
+                  value={email}
+                  type="email"
+                  placeholder="email@example.com"
+                  disabled={isLoading}
+                  onChange={(event) => setEmail(event.target.value)}
+                />
+              </InputBox>
+            </Field>
+
+            <Field>
+              <Label>Пароль</Label>
+
+              <InputBox>
+                <FiLock />
+
+                <Input
+                  value={password}
+                  type="password"
+                  minLength={6}
+                  placeholder="Минимум 6 символов"
+                  disabled={isLoading}
+                  onChange={(event) => setPassword(event.target.value)}
+                />
+              </InputBox>
+            </Field>
+
+            {errorMessage && <ErrorText>{errorMessage}</ErrorText>}
+
+            <SubmitButton type="submit" disabled={isLoading}>
+              {isLoading ? 'Подождите...' : buttonText}
+            </SubmitButton>
+          </Form>
+
+          <SwitchText>
+            <span>{isLogin ? 'Еще нет аккаунта?' : 'Уже есть аккаунт?'}</span>
+
+            <button type="button" disabled={isLoading} onClick={handleModeSwitch}>
+              {isLogin ? 'Создать аккаунт' : 'Войти'}
+            </button>
+          </SwitchText>
+        </Content>
+      </Modal>
+    </Overlay>
+  );
 }
 
 const overlayAppear = keyframes`
@@ -265,25 +267,31 @@ const modalAppear = keyframes`
 const Overlay = styled.div`
   position: fixed;
   inset: 0;
-  z-index: 100;
+  z-index: 2000;
   padding: 18px;
   background: rgba(4, 6, 14, 0.72);
   backdrop-filter: blur(18px);
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   animation: ${overlayAppear} 0.18s ease;
 
   @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-    padding: 10px;
-    align-items: end;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 10px 10px calc(108px + env(safe-area-inset-bottom));
   }
 `;
 
 const Modal = styled.div`
   position: relative;
   width: min(940px, 100%);
-  min-height: 560px;
-  overflow: hidden;
+  max-height: calc(100dvh - 36px);
+  overflow: hidden auto;
   border: 1px solid ${({ theme }) => theme.colors.border};
   border-radius: 34px;
   background:
@@ -297,13 +305,15 @@ const Modal = styled.div`
 
   @media (max-width: ${({ theme }) => theme.breakpoints.tablet}) {
     grid-template-columns: 1fr;
-    min-height: auto;
+    max-height: calc(100dvh - 28px);
   }
 
   @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-    max-height: calc(100vh - 20px);
-    overflow-y: auto;
-    border-radius: 28px 28px 18px 18px;
+    width: 100%;
+    max-height: none;
+    min-height: auto;
+    overflow: visible;
+    border-radius: 28px;
   }
 `;
 
@@ -322,8 +332,18 @@ const CloseButton = styled.button`
   place-items: center;
   font-size: 22px;
 
-  &:hover {
+  &:hover:not(:disabled) {
     background: rgba(255, 255, 255, 0.1);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    top: 12px;
+    right: 12px;
   }
 `;
 
@@ -362,12 +382,23 @@ const Visual = styled.div`
   }
 
   @media (max-width: ${({ theme }) => theme.breakpoints.tablet}) {
-    min-height: 180px;
+    min-height: 150px;
     border-right: none;
     border-bottom: 1px solid ${({ theme }) => theme.colors.border};
 
     &::after {
       display: none;
+    }
+  }
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    min-height: 96px;
+    padding: 22px;
+
+    &::before {
+      left: 18px;
+      top: 16px;
+      font-size: 20px;
     }
   }
 `;
@@ -380,6 +411,12 @@ const Glow = styled.div`
   background: linear-gradient(135deg, #7c3aed, #2563eb, #ef4444);
   filter: blur(34px);
   opacity: 0.46;
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    width: 140px;
+    height: 140px;
+    filter: blur(28px);
+  }
 `;
 
 const IconCircle = styled.div`
@@ -396,13 +433,29 @@ const IconCircle = styled.div`
   display: grid;
   place-items: center;
   font-size: 64px;
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.tablet}) {
+    width: 88px;
+    height: 88px;
+    border-radius: 30px;
+    font-size: 38px;
+  }
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    display: none;
+  }
 `;
 
 const Content = styled.div`
+  min-width: 0;
   padding: 72px 42px 38px;
 
   @media (max-width: ${({ theme }) => theme.breakpoints.tablet}) {
-    padding: 34px 22px 26px;
+    padding: 30px 22px 26px;
+  }
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    padding: 54px 16px 18px;
   }
 `;
 
@@ -411,12 +464,21 @@ const Title = styled.h2`
   font-size: clamp(30px, 4vw, 46px);
   line-height: 1;
   letter-spacing: -0.07em;
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    font-size: 30px;
+  }
 `;
 
 const Subtitle = styled.p`
   margin: 14px 0 0;
   color: ${({ theme }) => theme.colors.textMuted};
   line-height: 1.6;
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    font-size: 14px;
+    line-height: 1.45;
+  }
 `;
 
 const Reason = styled.div`
@@ -428,12 +490,23 @@ const Reason = styled.div`
   color: ${({ theme }) => theme.colors.text};
   line-height: 1.45;
   font-weight: 600;
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    margin-top: 12px;
+    padding: 11px 12px;
+    font-size: 13px;
+  }
 `;
 
 const Form = styled.form`
   margin-top: 24px;
   display: grid;
   gap: 15px;
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    margin-top: 16px;
+    gap: 12px;
+  }
 `;
 
 const Field = styled.div`
@@ -453,10 +526,10 @@ const InputBox = styled.div`
   border: 1px solid ${({ theme }) => theme.colors.border};
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.045);
+  color: ${({ theme }) => theme.colors.textMuted};
   display: flex;
   align-items: center;
   gap: 10px;
-  color: ${({ theme }) => theme.colors.textMuted};
 
   &:focus-within {
     border-color: rgba(139, 92, 246, 0.8);
@@ -467,10 +540,16 @@ const InputBox = styled.div`
     flex: 0 0 auto;
     font-size: 18px;
   }
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    height: 48px;
+    border-radius: 16px;
+  }
 `;
 
 const Input = styled.input`
   width: 100%;
+  min-width: 0;
   border: none;
   outline: none;
   background: transparent;
@@ -511,6 +590,11 @@ const SubmitButton = styled.button`
     opacity: 0.62;
     cursor: not-allowed;
   }
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    height: 50px;
+    border-radius: 17px;
+  }
 `;
 
 const SwitchText = styled.div`
@@ -532,5 +616,11 @@ const SwitchText = styled.div`
       opacity: 0.6;
       cursor: not-allowed;
     }
+  }
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    margin-top: 16px;
+    padding-bottom: 2px;
+    font-size: 14px;
   }
 `;

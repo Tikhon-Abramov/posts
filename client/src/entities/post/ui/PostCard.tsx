@@ -1,539 +1,693 @@
+import { useEffect, useRef, useState } from 'react';
 import type { MouseEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import styled from 'styled-components';
 import {
-    FiBookmark,
-    FiHeart,
-    FiImage,
-    FiLock,
-    FiMessageCircle,
-    FiStar,
-    FiThumbsDown,
-    FiUser,
-    FiVideo,
+  FiBookmark,
+  FiHeart,
+  FiImage,
+  FiLock,
+  FiMessageCircle,
+  FiStar,
+  FiThumbsDown,
+  FiUser,
+  FiVideo,
 } from 'react-icons/fi';
 
 import type { AppDispatch, RootState } from '../../../app/store';
 import { openAuthModal } from '../../auth/slice/authSlice';
 import {
-    useDislikePostMutation,
-    useLikePostMutation,
-    useSavePostMutation,
-    useUnsavePostMutation,
+  useDislikePostMutation,
+  useGetPostByIdQuery,
+  useLikePostMutation,
+  useSavePostMutation,
+  useUnsavePostMutation,
 } from '../api/postApi';
 import type { Post } from '../model/postTypes';
 import { getMediaUrl } from '../../../shared/lib/getMediaUrl';
 
 interface PostCardProps {
-    post: Post;
+  post: Post;
 }
 
+const POST_REALTIME_POLLING_INTERVAL = 15000;
+
 export function PostCard({ post }: PostCardProps) {
-    const dispatch = useDispatch<AppDispatch>();
+  const dispatch = useDispatch<AppDispatch>();
+  const cardRef = useRef<HTMLElement | null>(null);
 
-    const { accessToken, user } = useSelector((state: RootState) => state.auth);
+  const { accessToken, user } = useSelector((state: RootState) => state.auth);
 
-    const [likePost, { isLoading: isLikeLoading }] = useLikePostMutation();
-    const [dislikePost, { isLoading: isDislikeLoading }] = useDislikePostMutation();
-    const [savePost, { isLoading: isSaveLoading }] = useSavePostMutation();
-    const [unsavePost, { isLoading: isUnsaveLoading }] = useUnsavePostMutation();
+  const [isCardVisible, setIsCardVisible] = useState(false);
 
-    const firstMedia = post.media[0];
-    const mediaUrl = getMediaUrl(firstMedia?.url);
-    const authorAvatarUrl = getMediaUrl(post.author.avatarUrl);
+  const { data: realtimePost } = useGetPostByIdQuery(post.id, {
+    skip: !isCardVisible,
+    pollingInterval: POST_REALTIME_POLLING_INTERVAL,
+    refetchOnFocus: true,
+    refetchOnReconnect: true,
+  });
 
-    const isAuth = Boolean(accessToken);
-    const isActionLoading =
-        isLikeLoading || isDislikeLoading || isSaveLoading || isUnsaveLoading;
+  const currentPost = realtimePost || post;
 
-    const canViewPremium =
-        post.visibility === 'PUBLIC' ||
-        user?.role === 'ADMIN' ||
-        user?.id === post.author.id ||
-        user?.hasPremium;
+  const [likePost, { isLoading: isLikeLoading }] = useLikePostMutation();
+  const [dislikePost, { isLoading: isDislikeLoading }] =
+    useDislikePostMutation();
+  const [savePost, { isLoading: isSaveLoading }] = useSavePostMutation();
+  const [unsavePost, { isLoading: isUnsaveLoading }] =
+    useUnsavePostMutation();
 
-    const handleProtectedAction = (
-        event: MouseEvent<HTMLButtonElement>,
-        reason: string
-    ) => {
-        if (isAuth) {
-            return true;
-        }
+  const firstMedia = currentPost.media[0];
+  const mediaUrl = getMediaUrl(firstMedia?.url);
+  const authorAvatarUrl = getMediaUrl(currentPost.author.avatarUrl);
 
-        event.preventDefault();
+  const isAuth = Boolean(accessToken);
 
-        dispatch(
-            openAuthModal({
-                mode: 'login',
-                reason,
-            })
-        );
+  const isActionLoading =
+    isLikeLoading || isDislikeLoading || isSaveLoading || isUnsaveLoading;
 
-        return false;
-    };
+  const canViewPremium =
+    currentPost.visibility === 'PUBLIC' ||
+    user?.role === 'ADMIN' ||
+    user?.id === currentPost.author.id ||
+    user?.hasPremium;
 
-    const handleLike = async (event: MouseEvent<HTMLButtonElement>) => {
-        const canContinue = handleProtectedAction(
-            event,
-            'Чтобы поставить лайк, нужно войти в аккаунт.'
-        );
+  const backgroundUrl =
+    firstMedia?.type === 'IMAGE' && mediaUrl ? mediaUrl : undefined;
 
-        if (!canContinue) {
-            return;
-        }
+  const description = currentPost.description?.trim() || '';
 
-        try {
-            await likePost(post.id).unwrap();
-        } catch (error) {
-            window.alert(getErrorMessage(error, 'Не удалось обновить лайк.'));
-        }
-    };
+  useEffect(() => {
+    const target = cardRef.current;
 
-    const handleDislike = async (event: MouseEvent<HTMLButtonElement>) => {
-        const canContinue = handleProtectedAction(
-            event,
-            'Чтобы поставить дизлайк, нужно войти в аккаунт.'
-        );
+    if (!target) {
+      return;
+    }
 
-        if (!canContinue) {
-            return;
-        }
-
-        try {
-            await dislikePost(post.id).unwrap();
-        } catch (error) {
-            window.alert(getErrorMessage(error, 'Не удалось обновить дизлайк.'));
-        }
-    };
-
-    const handleSave = async (event: MouseEvent<HTMLButtonElement>) => {
-        const canContinue = handleProtectedAction(
-            event,
-            'Чтобы сохранять посты, нужно войти в аккаунт.'
-        );
-
-        if (!canContinue) {
-            return;
-        }
-
-        try {
-            if (post.isSavedByMe) {
-                await unsavePost(post.id).unwrap();
-            } else {
-                await savePost(post.id).unwrap();
-            }
-        } catch (error) {
-            window.alert(getErrorMessage(error, 'Не удалось обновить сохранение.'));
-        }
-    };
-
-    return (
-        <Card>
-            <MediaLink to={`/posts/${post.id}`}>
-                {firstMedia?.type === 'IMAGE' && mediaUrl ? (
-                    <MediaImage src={mediaUrl} alt={post.title || 'Публикация'} />
-                ) : firstMedia?.type === 'VIDEO' && mediaUrl ? (
-                    <MediaVideo src={mediaUrl} controls />
-                ) : (
-                    <MediaPlaceholder>
-                        {firstMedia?.type === 'VIDEO' ? <FiVideo /> : <FiImage />}
-                        <span>Медиа недоступно</span>
-                    </MediaPlaceholder>
-                )}
-
-                <VisibilityBadge $visibility={post.visibility}>
-                    {post.visibility === 'PREMIUM' ? (
-                        <>
-                            <FiStar />
-                            Premium
-                        </>
-                    ) : (
-                        <>
-                            <FiImage />
-                            Public
-                        </>
-                    )}
-                </VisibilityBadge>
-
-                {post.visibility === 'PREMIUM' && !canViewPremium && (
-                    <LockedOverlay>
-                        <FiLock />
-                        <span>Premium</span>
-                    </LockedOverlay>
-                )}
-            </MediaLink>
-
-            <Body>
-                <AuthorRow>
-                    <Author>
-                        <AuthorAvatar>
-                            {authorAvatarUrl ? (
-                                <img src={authorAvatarUrl} alt={post.author.nickname} />
-                            ) : (
-                                <FiUser />
-                            )}
-                        </AuthorAvatar>
-
-                        <AuthorText>
-                            <strong>@{post.author.nickname}</strong>
-                            <span>{new Date(post.createdAt).toLocaleString('ru-RU')}</span>
-                        </AuthorText>
-                    </Author>
-
-                    {post.visibility === 'PREMIUM' && (
-                        <PremiumPill>
-                            <FiStar />
-                            Premium
-                        </PremiumPill>
-                    )}
-                </AuthorRow>
-
-                <ContentLink to={`/posts/${post.id}`}>
-                    <Title>{post.title || 'Без названия'}</Title>
-
-                    {post.description ? (
-                        <Description>{post.description}</Description>
-                    ) : (
-                        <MutedDescription>Описание не указано</MutedDescription>
-                    )}
-                </ContentLink>
-
-                <Actions>
-                    <ActionButton
-                        type="button"
-                        $active={post.isLikedByMe}
-                        disabled={isActionLoading}
-                        onClick={handleLike}
-                    >
-                        <FiHeart />
-                        <span>{post.likesCount}</span>
-                    </ActionButton>
-
-                    <ActionButton
-                        type="button"
-                        $active={post.isDislikedByMe}
-                        disabled={isActionLoading}
-                        onClick={handleDislike}
-                    >
-                        <FiThumbsDown />
-                        <span>{post.dislikesCount}</span>
-                    </ActionButton>
-
-                    <CommentsLink to={`/posts/${post.id}#comments`}>
-                        <FiMessageCircle />
-                        <span>{post.commentsCount}</span>
-                    </CommentsLink>
-
-                    <SaveButton
-                        type="button"
-                        $active={post.isSavedByMe}
-                        disabled={isActionLoading}
-                        onClick={handleSave}
-                    >
-                        <FiBookmark />
-                        <span>{post.isSavedByMe ? 'Сохранено' : 'Сохранить'}</span>
-                    </SaveButton>
-                </Actions>
-            </Body>
-        </Card>
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setIsCardVisible(entry.isIntersecting);
+      },
+      {
+        root: null,
+        rootMargin: '500px 0px',
+        threshold: 0,
+      }
     );
+
+    observer.observe(target);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  const handleProtectedAction = (event: MouseEvent, reason: string) => {
+    if (isAuth) {
+      return true;
+    }
+
+    event.preventDefault();
+
+    dispatch(
+      openAuthModal({
+        mode: 'login',
+        reason,
+      })
+    );
+
+    return false;
+  };
+
+  const handleLike = async (event: MouseEvent) => {
+    const canContinue = handleProtectedAction(
+      event,
+      'Чтобы поставить лайк, нужно войти в аккаунт.'
+    );
+
+    if (!canContinue) {
+      return;
+    }
+
+    try {
+      await likePost(currentPost.id).unwrap();
+    } catch (error) {
+      window.alert(getErrorMessage(error, 'Не удалось обновить лайк.'));
+    }
+  };
+
+  const handleDislike = async (event: MouseEvent) => {
+    const canContinue = handleProtectedAction(
+      event,
+      'Чтобы поставить дизлайк, нужно войти в аккаунт.'
+    );
+
+    if (!canContinue) {
+      return;
+    }
+
+    try {
+      await dislikePost(currentPost.id).unwrap();
+    } catch (error) {
+      window.alert(getErrorMessage(error, 'Не удалось обновить дизлайк.'));
+    }
+  };
+
+  const handleSave = async (event: MouseEvent) => {
+    const canContinue = handleProtectedAction(
+      event,
+      'Чтобы сохранять посты, нужно войти в аккаунт.'
+    );
+
+    if (!canContinue) {
+      return;
+    }
+
+    try {
+      if (currentPost.isSavedByMe) {
+        await unsavePost(currentPost.id).unwrap();
+      } else {
+        await savePost(currentPost.id).unwrap();
+      }
+    } catch (error) {
+      window.alert(getErrorMessage(error, 'Не удалось обновить сохранение.'));
+    }
+  };
+
+  return (
+    <Card ref={cardRef}>
+      <MediaFrame
+        $backgroundUrl={backgroundUrl}
+        $hasImage={Boolean(backgroundUrl)}
+      >
+        {firstMedia?.type === 'IMAGE' && mediaUrl ? (
+          <MediaImageLink to={`/posts/${currentPost.id}`}>
+            <MediaImage src={mediaUrl} alt={currentPost.title || 'Пост'} />
+          </MediaImageLink>
+        ) : firstMedia?.type === 'VIDEO' && mediaUrl ? (
+          <MediaVideo src={mediaUrl} controls />
+        ) : (
+          <MediaPlaceholder>
+            {firstMedia?.type === 'VIDEO' ? <FiVideo /> : <FiImage />}
+            <span>Медиа недоступно</span>
+          </MediaPlaceholder>
+        )}
+
+        <SaveIconButton
+          type="button"
+          $active={currentPost.isSavedByMe}
+          disabled={isActionLoading}
+          aria-label={
+            currentPost.isSavedByMe ? 'Убрать из сохраненных' : 'Сохранить'
+          }
+          title={currentPost.isSavedByMe ? 'Убрать из сохраненных' : 'Сохранить'}
+          onClick={handleSave}
+        >
+          <FiBookmark />
+        </SaveIconButton>
+
+        {currentPost.visibility === 'PREMIUM' && !canViewPremium && (
+          <LockedOverlay>
+            <FiLock />
+            <span>Premium</span>
+          </LockedOverlay>
+        )}
+      </MediaFrame>
+
+      <Body>
+        <ContentLink to={`/posts/${currentPost.id}`}>
+          <Title>{currentPost.title || 'Без названия'}</Title>
+        </ContentLink>
+
+        <AuthorRow>
+          <Author>
+            <AuthorAvatar>
+              {authorAvatarUrl ? (
+                <img src={authorAvatarUrl} alt={currentPost.author.nickname} />
+              ) : (
+                <FiUser />
+              )}
+            </AuthorAvatar>
+
+            <AuthorText>
+              <span>@{currentPost.author.nickname}</span>
+            </AuthorText>
+          </Author>
+
+          {currentPost.visibility === 'PREMIUM' && (
+            <PremiumPill>
+              <FiStar />
+              Premium
+            </PremiumPill>
+          )}
+        </AuthorRow>
+
+        {description && (
+          <ContentLink to={`/posts/${currentPost.id}`}>
+            <Description>{description}</Description>
+          </ContentLink>
+        )}
+
+        <Actions>
+          <ActionButton
+            type="button"
+            $active={currentPost.isLikedByMe}
+            $variant="like"
+            disabled={isActionLoading}
+            onClick={handleLike}
+          >
+            <FiHeart />
+            <span>{formatCount(currentPost.likesCount)}</span>
+          </ActionButton>
+
+          <ActionButton
+            type="button"
+            $active={currentPost.isDislikedByMe}
+            $variant="dislike"
+            disabled={isActionLoading}
+            onClick={handleDislike}
+          >
+            <FiThumbsDown />
+            <span>{formatCount(currentPost.dislikesCount)}</span>
+          </ActionButton>
+
+          <CommentsLink to={`/posts/${currentPost.id}#comments`}>
+            <FiMessageCircle />
+            <span>{formatCount(currentPost.commentsCount)}</span>
+          </CommentsLink>
+        </Actions>
+      </Body>
+    </Card>
+  );
+}
+
+function formatCount(value: number) {
+  const count = Number(value || 0);
+
+  if (count < 1000) {
+    return String(count);
+  }
+
+  const thousands = count / 1000;
+
+  if (thousands < 100) {
+    return `${trimTrailingZero(thousands.toFixed(1))} тыс.`;
+  }
+
+  return `${Math.round(thousands)} тыс.`;
+}
+
+function trimTrailingZero(value: string) {
+  return value.endsWith('.0') ? value.slice(0, -2) : value;
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
-    if (
-        typeof error === 'object' &&
-        error !== null &&
-        'data' in error &&
-        typeof (error as { data?: { message?: unknown } }).data?.message === 'string'
-    ) {
-        return (error as { data: { message: string } }).data.message;
-    }
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'data' in error &&
+    typeof (error as { data?: { message?: unknown } }).data?.message === 'string'
+  ) {
+    return (error as { data: { message: string } }).data.message;
+  }
 
-    return fallback;
+  return fallback;
 }
 
 const Card = styled.article`
-    overflow: hidden;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.lg};
-    background: rgba(21, 25, 43, 0.84);
-    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.lg};
+  background: rgba(21, 25, 43, 0.84);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.18);
 `;
 
-const MediaLink = styled(Link)`
-    position: relative;
-    overflow: hidden;
-    min-height: 320px;
-    background: #05060d;
-    display: block;
+const MediaFrame = styled.div<{
+  $backgroundUrl?: string;
+  $hasImage?: boolean;
+}>`
+  position: relative;
+  overflow: hidden;
+  height: clamp(320px, 68vw, 620px);
+  background:
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.22), transparent 34%),
+    radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.16), transparent 34%),
+    #05060d;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  isolation: isolate;
 
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        min-height: 240px;
-    }
+  &::before {
+    content: '';
+    position: absolute;
+    inset: -34px;
+    z-index: -2;
+    background-image: ${({ $backgroundUrl }) =>
+      $backgroundUrl ? `url("${$backgroundUrl}")` : 'none'};
+    background-size: cover;
+    background-position: center;
+    filter: blur(28px);
+    transform: scale(1.08);
+    opacity: ${({ $hasImage }) => ($hasImage ? 0.58 : 0)};
+  }
+
+  &::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background:
+      linear-gradient(
+        90deg,
+        rgba(5, 6, 13, 0.52),
+        rgba(5, 6, 13, 0.12) 18%,
+        rgba(5, 6, 13, 0.08) 50%,
+        rgba(5, 6, 13, 0.12) 82%,
+        rgba(5, 6, 13, 0.52)
+      ),
+      linear-gradient(
+        180deg,
+        rgba(5, 6, 13, 0.42),
+        rgba(5, 6, 13, 0.04) 24%,
+        rgba(5, 6, 13, 0.04) 76%,
+        rgba(5, 6, 13, 0.42)
+      );
+    pointer-events: none;
+  }
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.tablet}) {
+    height: clamp(300px, 82vw, 560px);
+  }
+
+  @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
+    height: clamp(280px, 105vw, 520px);
+  }
+`;
+
+const MediaImageLink = styled(Link)`
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  display: block;
 `;
 
 const MediaImage = styled.img`
-    width: 100%;
-    height: 420px;
-    object-fit: cover;
-    display: block;
-    transition: transform 0.25s ease;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  display: block;
+  transition:
+    transform 0.25s ease,
+    filter 0.25s ease;
+  filter: drop-shadow(0 20px 44px rgba(0, 0, 0, 0.28));
 
-    ${MediaLink}:hover & {
-        transform: scale(1.025);
-    }
-
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        height: 280px;
-    }
+  ${MediaImageLink}:hover & {
+    transform: scale(1.012);
+  }
 `;
 
 const MediaVideo = styled.video`
-    width: 100%;
-    height: 420px;
-    object-fit: cover;
-    display: block;
-    background: #05060d;
-
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        height: 280px;
-    }
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  display: block;
+  background: transparent;
+  filter: drop-shadow(0 20px 44px rgba(0, 0, 0, 0.28));
 `;
 
 const MediaPlaceholder = styled.div`
-    height: 420px;
-    background:
-            radial-gradient(circle at top left, rgba(124, 58, 237, 0.28), transparent 34%),
-            radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.2), transparent 34%),
-            #080a12;
-    color: ${({ theme }) => theme.colors.primaryHover};
-    display: grid;
-    place-content: center;
-    justify-items: center;
-    gap: 10px;
-    font-weight: 900;
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  background:
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.28), transparent 34%),
+    radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.2), transparent 34%),
+    #080a12;
+  color: ${({ theme }) => theme.colors.primaryHover};
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  font-weight: 800;
 
-    svg {
-        font-size: 48px;
-    }
+  svg {
+    font-size: 48px;
+  }
 
-    span {
-        color: ${({ theme }) => theme.colors.textMuted};
-    }
-
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        height: 280px;
-    }
+  span {
+    color: ${({ theme }) => theme.colors.textMuted};
+  }
 `;
 
-const VisibilityBadge = styled.div<{ $visibility: Post['visibility'] }>`
-    position: absolute;
-    left: 14px;
-    top: 14px;
-    min-height: 34px;
-    padding: 0 12px;
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: ${({ $visibility }) =>
-            $visibility === 'PREMIUM'
-                    ? 'rgba(236, 72, 153, 0.9)'
-                    : 'rgba(37, 99, 235, 0.88)'};
-    color: white;
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    font-size: 13px;
-    font-weight: 900;
-    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
+const SaveIconButton = styled.button<{ $active?: boolean }>`
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 5;
+  width: 42px;
+  height: 42px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: rgba(5, 6, 13, 0.48);
+  backdrop-filter: blur(14px);
+  color: ${({ theme, $active }) =>
+    $active ? theme.colors.primaryHover : theme.colors.textMuted};
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.24);
+
+  svg {
+    transition:
+      color 0.18s ease,
+      transform 0.18s ease;
+  }
+
+  &:hover:not(:disabled) {
+    background: rgba(5, 6, 13, 0.62);
+    color: ${({ theme }) => theme.colors.primaryHover};
+
+    svg {
+      transform: scale(1.08);
+    }
+  }
+
+  &:disabled {
+    opacity: 0.65;
+    cursor: not-allowed;
+  }
 `;
 
 const LockedOverlay = styled.div`
-    position: absolute;
-    inset: 0;
-    background:
-            radial-gradient(circle at center, rgba(124, 58, 237, 0.18), transparent 42%),
-            rgba(5, 6, 13, 0.74);
-    backdrop-filter: blur(8px);
-    color: white;
-    display: grid;
-    place-content: center;
-    justify-items: center;
-    gap: 10px;
-    font-weight: 900;
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  background:
+    radial-gradient(circle at center, rgba(124, 58, 237, 0.18), transparent 42%),
+    rgba(5, 6, 13, 0.74);
+  backdrop-filter: blur(8px);
+  color: white;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  font-weight: 800;
 
-    svg {
-        font-size: 42px;
-        color: #f9a8d4;
-    }
+  svg {
+    color: #f9a8d4;
+    font-size: 42px;
+  }
 `;
 
 const Body = styled.div`
-    padding: 16px;
-    display: grid;
-    gap: 14px;
-`;
-
-const AuthorRow = styled.div`
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-`;
-
-const Author = styled.div`
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-`;
-
-const AuthorAvatar = styled.div`
-    flex: 0 0 auto;
-    width: 44px;
-    height: 44px;
-    overflow: hidden;
-    border-radius: 16px;
-    background: linear-gradient(135deg, #7c3aed, #2563eb);
-    color: white;
-    display: grid;
-    place-items: center;
-    font-size: 20px;
-
-    img {
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-    }
-`;
-
-const AuthorText = styled.div`
-    min-width: 0;
-    display: grid;
-    gap: 2px;
-
-    strong {
-        overflow: hidden;
-        color: ${({ theme }) => theme.colors.text};
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    span {
-        color: ${({ theme }) => theme.colors.textMuted};
-        font-size: 12px;
-        font-weight: 700;
-    }
-`;
-
-const PremiumPill = styled.div`
-    flex: 0 0 auto;
-    min-height: 32px;
-    padding: 0 10px;
-    border: 1px solid rgba(236, 72, 153, 0.28);
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(236, 72, 153, 0.12);
-    color: #f9a8d4;
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    font-size: 12px;
-    font-weight: 900;
+  padding: 15px 16px 14px;
+  display: grid;
+  gap: 10px;
 `;
 
 const ContentLink = styled(Link)`
-    color: inherit;
-    display: grid;
-    gap: 8px;
+  color: inherit;
+  display: grid;
+  gap: 8px;
 `;
 
 const Title = styled.h2`
-    margin: 0;
-    color: ${({ theme }) => theme.colors.text};
-    font-size: 24px;
-    letter-spacing: -0.055em;
-    line-height: 1.1;
+  margin: 0;
+  color: ${({ theme }) => theme.colors.text};
+  font-size: 21px;
+  line-height: 1.18;
+  letter-spacing: -0.045em;
+  font-weight: 500;
+`;
+
+const AuthorRow = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+`;
+
+const Author = styled.div`
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+`;
+
+const AuthorAvatar = styled.div`
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  overflow: hidden;
+  border-radius: 13px;
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  color: white;
+  display: grid;
+  place-items: center;
+  font-size: 16px;
+
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+`;
+
+const AuthorText = styled.div`
+  min-width: 0;
+  display: grid;
+
+  span {
+    overflow: hidden;
+    color: ${({ theme }) => theme.colors.textMuted};
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    font-weight: 500;
+  }
+`;
+
+const PremiumPill = styled.div`
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 0 9px;
+  border: 1px solid rgba(236, 72, 153, 0.22);
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: rgba(236, 72, 153, 0.09);
+  color: #f9a8d4;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
 `;
 
 const Description = styled.p`
-    margin: 0;
-    color: ${({ theme }) => theme.colors.textMuted};
-    line-height: 1.55;
-    white-space: pre-wrap;
-`;
-
-const MutedDescription = styled(Description)`
-    opacity: 0.65;
-    font-style: italic;
+  margin: 0;
+  color: ${({ theme }) => theme.colors.textMuted};
+  line-height: 1.5;
+  white-space: pre-wrap;
+  font-size: 14px;
+  font-weight: 400;
 `;
 
 const Actions = styled.div`
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding-top: 2px;
 `;
 
-const ActionButton = styled.button<{ $active?: boolean }>`
-    min-height: 40px;
-    padding: 0 12px;
-    border: 1px solid
-    ${({ theme, $active }) =>
-            $active ? 'rgba(139, 92, 246, 0.62)' : theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: ${({ $active }) =>
-            $active
-                    ? 'linear-gradient(135deg, rgba(124, 58, 237, 0.68), rgba(37, 99, 235, 0.56))'
-                    : 'rgba(255, 255, 255, 0.045)'};
-    color: ${({ theme }) => theme.colors.text};
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    font-weight: 900;
+const ActionButton = styled.button<{
+  $active?: boolean;
+  $variant?: 'like' | 'dislike';
+}>`
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: rgba(255, 255, 255, 0.035);
+  color: ${({ theme }) => theme.colors.textMuted};
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+
+  svg {
+    color: ${({ theme, $active, $variant }) => {
+      if (!$active) {
+        return theme.colors.textMuted;
+      }
+
+      if ($variant === 'like') {
+        return '#ef4444';
+      }
+
+      if ($variant === 'dislike') {
+        return '#60a5fa';
+      }
+
+      return theme.colors.primaryHover;
+    }};
+    transition:
+      color 0.18s ease,
+      transform 0.18s ease;
+  }
+
+  &:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.055);
 
     svg {
-        color: ${({ $active, theme }) =>
-                $active ? 'white' : theme.colors.primaryHover};
+      transform: scale(1.08);
+      color: ${({ theme, $variant }) =>
+        $variant === 'like'
+          ? '#ef4444'
+          : $variant === 'dislike'
+            ? '#60a5fa'
+            : theme.colors.primaryHover};
     }
+  }
 
-    &:hover:not(:disabled) {
-        background: ${({ $active }) =>
-                $active
-                        ? 'linear-gradient(135deg, rgba(124, 58, 237, 0.78), rgba(37, 99, 235, 0.66))'
-                        : 'rgba(255, 255, 255, 0.08)'};
-    }
-
-    &:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-    }
+  &:disabled {
+    opacity: 0.65;
+    cursor: not-allowed;
+  }
 `;
 
 const CommentsLink = styled(Link)`
-    min-height: 40px;
-    padding: 0 12px;
-    border: 1px solid ${({ theme }) => theme.colors.border};
-    border-radius: ${({ theme }) => theme.radius.full};
-    background: rgba(255, 255, 255, 0.045);
-    color: ${({ theme }) => theme.colors.text};
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    font-weight: 900;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: ${({ theme }) => theme.radius.full};
+  background: rgba(255, 255, 255, 0.035);
+  color: ${({ theme }) => theme.colors.textMuted};
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+
+  svg {
+    color: ${({ theme }) => theme.colors.textMuted};
+    transition:
+      color 0.18s ease,
+      transform 0.18s ease;
+  }
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.055);
 
     svg {
-        color: ${({ theme }) => theme.colors.primaryHover};
+      color: ${({ theme }) => theme.colors.primaryHover};
+      transform: scale(1.08);
     }
-
-    &:hover {
-        background: rgba(255, 255, 255, 0.08);
-    }
-`;
-
-const SaveButton = styled(ActionButton)`
-    margin-left: auto;
-
-    @media (max-width: ${({ theme }) => theme.breakpoints.mobile}) {
-        margin-left: 0;
-        width: 100%;
-        justify-content: center;
-    }
+  }
 `;

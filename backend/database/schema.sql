@@ -218,3 +218,10 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     REFERENCES users(id)
                                                            ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+    ALTER TABLE notifications
+  ADD COLUMN actor_user_id INT NULL AFTER user_id;
+
+CREATE INDEX idx_notifications_like_dedupe
+  ON notifications (user_id, type, post_id, actor_user_id);

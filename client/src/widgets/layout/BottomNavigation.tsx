@@ -67,11 +67,11 @@ export function BottomNavigation() {
             icon: <FiHome />,
             end: true,
         },
-        {
+        /*{
             to: '/premium',
             label: 'Premium',
             icon: <FiStar />,
-        },
+        },*/
         {
             to: '/saved',
             label: 'Сохр.',
@@ -93,11 +93,11 @@ export function BottomNavigation() {
             icon: <FiBell />,
             badge: unreadNotificationsCount,
         },
-        {
+        /*{
             to: '/subscription',
             label: 'Подп.',
             icon: <FiCreditCard />,
-        },
+        },*/
         {
             to: '/profile',
             label: 'Профиль',

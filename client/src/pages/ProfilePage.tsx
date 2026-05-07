@@ -240,14 +240,7 @@ export function ProfilePage() {
             </AccountInfo>
 
             <AccountActions>
-              <RefreshButton
-                  type="button"
-                  disabled={isRefetchingMe}
-                  onClick={handleRefreshProfile}
-              >
-                <FiRefreshCw />
-                {isRefetchingMe ? 'Обновляем...' : 'Обновить'}
-              </RefreshButton>
+             
 
               <LogoutButton type="button" onClick={handleLogout}>
                 <FiLogOut />
