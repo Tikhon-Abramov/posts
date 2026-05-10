@@ -7,8 +7,6 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
-    allowedHosts: [
-      "raises-game-proportion-release.trycloudflare.com"
-    ]
+    host: '0.0.0.0'
   },
 });
