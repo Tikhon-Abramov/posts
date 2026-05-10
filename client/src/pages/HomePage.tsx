@@ -167,7 +167,7 @@ export function HomePage() {
       return 'Пока публикаций нет';
     }
 
-  
+   
 
   }, [visiblePosts]);
 

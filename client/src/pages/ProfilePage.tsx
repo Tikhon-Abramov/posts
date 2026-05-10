@@ -41,15 +41,7 @@ export function ProfilePage() {
   const [changePassword, { isLoading: isChangingPassword }] =
       useChangePasswordMutation();
 
-  const { refetch: refetchMe, isFetching: isRefetchingMe } = useGetMeQuery(
-      undefined,
-      {
-        skip: !accessToken,
-        refetchOnMountOrArgChange: true,
-        refetchOnFocus: true,
-        refetchOnReconnect: true,
-      }
-  );
+
 
   const [nickname, setNickname] = useState('');
   const [email, setEmail] = useState('');

@@ -71,11 +71,11 @@ export function Sidebar() {
             icon: <FiHome />,
             end: true,
         },
-        /*{
+        {
             to: '/premium',
             label: 'Premium',
             icon: <FiStar />,
-        },*/
+        },
         {
             to: '/saved',
             label: 'Сохраненные',
@@ -97,11 +97,11 @@ export function Sidebar() {
             icon: <FiBell />,
             badge: unreadNotificationsCount,
         },
-        /*{
+        {
             to: '/subscription',
             label: 'Подписка',
             icon: <FiCreditCard />,
-        },*/
+        },
         {
             to: '/profile',
             label: 'Профиль',
