@@ -26,7 +26,7 @@ export function Header() {
     return (
         <HeaderRoot>
             <HeaderInner>
-                <Logo to="/">PulseFeed</Logo>
+                <Logo to="/">Tishgram</Logo>
 
                 <Actions>
                     {isAuth ? (

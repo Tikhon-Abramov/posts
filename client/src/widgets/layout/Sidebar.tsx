@@ -143,8 +143,8 @@ export function Sidebar() {
                 <LogoMark>PF</LogoMark>
 
                 <LogoText>
-                    <strong>PulseFeed</strong>
-                    <span>media platform</span>
+                    <strong>Tishgram</strong>
+                    {/*<span>media platform</span>*/}
                 </LogoText>
             </LogoLink>
 

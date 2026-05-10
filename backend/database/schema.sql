@@ -1,4 +1,5 @@
-USE pulsefeed_db;
+create database tishkagram;
+USE tishkagram;
 
 CREATE TABLE IF NOT EXISTS users (
                                      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

@@ -189,12 +189,10 @@ export function ContentRequestPage() {
             <Grid>
                 <FormCard onSubmit={handleSubmit}>
                     <FieldGroup>
-                        <Label>Название</Label>
-
                         <Input
                             value={title}
                             maxLength={90}
-                            placeholder="Например: Фото с мероприятия"
+                            placeholder="Название..."
                             onChange={(event) => setTitle(event.target.value)}
                         />
 
@@ -202,12 +200,10 @@ export function ContentRequestPage() {
                     </FieldGroup>
 
                     <FieldGroup>
-                        <Label>Описание</Label>
-
                         <Textarea
                             value={description}
                             maxLength={900}
-                            placeholder="Добавьте описание, контекст или пожелания для администратора..."
+                            placeholder="Описание..."
                             onChange={(event) => setDescription(event.target.value)}
                         />
 
@@ -226,7 +222,7 @@ export function ContentRequestPage() {
                                 <FiGlobe />
 
                                 <span>
-                  <strong>Обычная лента</strong>
+                  <strong>Лента</strong>
                   <small>Пост увидят все пользователи</small>
                 </span>
                             </VisibilityButton>
@@ -317,7 +313,7 @@ export function ContentRequestPage() {
                     </SubmitButton>
                 </FormCard>
 
-                <SidePanel>
+                {/*<SidePanel>
                     <InfoCard>
                         <FiFile />
 
@@ -356,7 +352,7 @@ export function ContentRequestPage() {
                             минимум 3 символа и выбранный файл.
                         </Text>
                     </InfoCard>
-                </SidePanel>
+                </SidePanel>*/}
             </Grid>
         </Page>
     );

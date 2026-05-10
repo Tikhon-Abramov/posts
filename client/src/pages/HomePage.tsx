@@ -167,15 +167,8 @@ export function HomePage() {
       return 'Пока публикаций нет';
     }
 
-    const imageCount = visiblePosts.filter(
-      (post) => post.media[0]?.type === 'IMAGE'
-    ).length;
+  
 
-    const videoCount = visiblePosts.filter(
-      (post) => post.media[0]?.type === 'VIDEO'
-    ).length;
-
-    return `Загружено: ${visiblePosts.length} • Фото: ${imageCount} • Видео: ${videoCount}`;
   }, [visiblePosts]);
 
   const resetFilters = () => {
