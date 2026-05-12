@@ -9,7 +9,9 @@ import {
   FiLock,
   FiLogOut,
   FiMail,
+  FiRefreshCw,
   FiSave,
+  FiShield,
   FiStar,
   FiUploadCloud,
   FiUser,
@@ -40,7 +42,6 @@ export function ProfilePage() {
       useUploadAvatarMutation();
   const [changePassword, { isLoading: isChangingPassword }] =
       useChangePasswordMutation();
-
 
 
   const [nickname, setNickname] = useState('');
@@ -104,7 +105,7 @@ export function ProfilePage() {
       setProfileMessage('Профиль обновлен.');
     } catch (error) {
       setProfileStatus('error');
-      setProfileMessage(getErrorMessage(error, 'Failed to update profile.'));
+      setProfileMessage(getErrorMessage(error, 'Не удалось обновить профиль.'));
     }
   };
 
@@ -126,7 +127,7 @@ export function ProfilePage() {
       setPasswordMessage('Пароль изменен.');
     } catch (error) {
       setPasswordStatus('error');
-      setPasswordMessage(getErrorMessage(error, 'Failed to change password.'));
+      setPasswordMessage(getErrorMessage(error, 'Не удалось изменить пароль.'));
     }
   };
 
@@ -146,7 +147,7 @@ export function ProfilePage() {
 
     if (!file.type.startsWith('image/')) {
       setAvatarStatus('error');
-      setAvatarMessage('The avatar must be an image.');
+      setAvatarMessage('Аватар должен быть изображением.');
       return;
     }
 
@@ -154,7 +155,7 @@ export function ProfilePage() {
 
     if (file.size > maxSizeBytes) {
       setAvatarStatus('error');
-      setAvatarMessage('The image must not be larger than 8 MB.');
+      setAvatarMessage('Изображение не должно быть больше 8 MB.');
       return;
     }
 
@@ -165,7 +166,7 @@ export function ProfilePage() {
       setAvatarMessage('Аватар обновлен.');
     } catch (error) {
       setAvatarStatus('error');
-      setAvatarMessage(getErrorMessage(error, 'Failed to load avatar.'));
+      setAvatarMessage(getErrorMessage(error, 'Не удалось загрузить аватар.'));
     } finally {
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
@@ -183,9 +184,9 @@ export function ProfilePage() {
         <StateCard>
           <FiLock />
 
-          <h1>Authorization required</h1>
+          <h1>Нужна авторизация</h1>
 
-          <p>Log in to your account to open your profile.</p>
+          <p>Войдите в аккаунт, чтобы открыть профиль.</p>
         </StateCard>
     );
   }
@@ -210,14 +211,13 @@ export function ProfilePage() {
             />
 
             <AccountInfo>
-              <Nickname>@{user.nickname}</Nickname>
-              <Email>{user.email}</Email>
+              <Nickname>{user.nickname}</Nickname>
 
               <Badges>
 
                 <Badge>
                   <FiStar />
-                  {user.hasPremium ? 'Premium' : 'Viewer'}
+                  {user.hasPremium ? 'Premium' : 'Без подписки'}
                 </Badge>
               </Badges>
             </AccountInfo>
@@ -227,7 +227,7 @@ export function ProfilePage() {
 
               <LogoutButton type="button" onClick={handleLogout}>
                 <FiLogOut />
-                Logout
+                Выйти
               </LogoutButton>
             </AccountActions>
 
@@ -250,7 +250,7 @@ export function ProfilePage() {
 
             <Form onSubmit={handleProfileSubmit}>
               <Field>
-                <Label>Name</Label>
+                <Label>Имя</Label>
 
                 <InputWrap>
                   <FiUser />
@@ -293,7 +293,7 @@ export function ProfilePage() {
 
               <SubmitButton type="submit" disabled={!canSaveProfile}>
                 <FiSave />
-                {isUpdatingProfile ? 'Saving...' : 'Save'}
+                {isUpdatingProfile ? 'Сохраняем...' : 'Сохранить'}
               </SubmitButton>
             </Form>
           </Card>
@@ -303,13 +303,13 @@ export function ProfilePage() {
               <FiLock />
 
               <div>
-                <h2>Password</h2>
+                <h2>Пароль</h2>
               </div>
             </CardHeader>
 
             <Form onSubmit={handlePasswordSubmit}>
               <Field>
-                <Label>Current password</Label>
+                <Label>Текущий пароль</Label>
 
                 <InputWrap>
                   <FiLock />
@@ -317,14 +317,14 @@ export function ProfilePage() {
                   <input
                       value={currentPassword}
                       type="password"
-                      placeholder="Enter your current password"
+                      placeholder="Введите текущий пароль"
                       onChange={(event) => setCurrentPassword(event.target.value)}
                   />
                 </InputWrap>
               </Field>
 
               <Field>
-                <Label>New password</Label>
+                <Label>Новый пароль</Label>
 
                 <InputWrap>
                   <FiLock />
@@ -333,7 +333,7 @@ export function ProfilePage() {
                       value={newPassword}
                       type="password"
                       minLength={6}
-                      placeholder="Minimum 6 characters"
+                      placeholder="Минимум 6 символов"
                       onChange={(event) => setNewPassword(event.target.value)}
                   />
                 </InputWrap>
@@ -352,7 +352,7 @@ export function ProfilePage() {
 
               <SubmitButton type="submit" disabled={!canChangePassword}>
                 <FiSave />
-                {isChangingPassword ? 'Changing...' : 'Change password'}
+                {isChangingPassword ? 'Меняем...' : 'Изменить пароль'}
               </SubmitButton>
             </Form>
           </Card>
@@ -362,7 +362,7 @@ export function ProfilePage() {
               <FiCamera />
 
               <div>
-                <h2>Avatar</h2>
+                <h2>Аватар</h2>
               </div>
             </CardHeader>
 
@@ -373,9 +373,9 @@ export function ProfilePage() {
             >
               <FiUploadCloud />
 
-              <strong>{isUploadingAvatar ? 'Loading...' : 'Select file'}</strong>
+              <strong>{isUploadingAvatar ? 'Загружаем...' : 'Выбрать файл'}</strong>
 
-              <span>JPG, PNG or WEBP up to 8 MB.</span>
+              <span>JPG, PNG или WEBP до 8 MB.</span>
             </AvatarUploadBox>
           </Card>
         </Grid>
@@ -496,9 +496,9 @@ const AccountInfo = styled.div`
   gap: 8px;
 `;
 
-const Nickname = styled.h2`
+const Nickname = styled.p`
   margin: 0;
-  font-size: clamp(28px, 4vw, 42px);
+  font-size: clamp(15px, 4vw, 42px);
   line-height: 1;
   letter-spacing: -0.07em;
   overflow: hidden;
